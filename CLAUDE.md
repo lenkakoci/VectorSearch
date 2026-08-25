@@ -60,6 +60,24 @@ them. Never write a stage that reprocesses everything unconditionally.
 | `.claude/skills/data-ingestion/SKILL.md` | Working on extraction, chunking, embedding, import, or evolving the extraction schema. |
 | `.claude/skills/local-runtime/SKILL.md` | Running Docker Compose, configuring PostgreSQL, or running the pipeline locally. |
 
+## Model provider
+
+Google Gemini via the native `google-genai` SDK, wired up in
+[data/scripts/gemini_auth.py](data/scripts/gemini_auth.py).
+
+Gemini's OpenAI-compatibility layer is deliberately **not** used: it exposes only
+chat completions (no Responses API) and does not document the `dimensions`
+parameter for embeddings. The native SDK also provides `task_type`, which the
+compatibility layer lacks and which materially affects retrieval quality.
+
+- Extraction: `GEMINI_MODEL` (default `gemini-3.7-flash`), structured output by
+  passing the Pydantic class as `response_schema`, `temperature=0.0`.
+- Embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`),
+  `output_dimensionality=1536`, `task_type=RETRIEVAL_DOCUMENT` for chunks and
+  `RETRIEVAL_QUERY` for search queries. Both sides of that pair must match.
+- 1536 dimensions, not Gemini's default 3072: a pgvector HNSW index accepts at
+  most 2000. Truncated vectors are L2-normalised in `gemini_auth.normalize()`.
+
 ## Always-on engineering rules
 
 - Python is `uv`-managed. Run scripts from `data/scripts` with `uv run python <script>.py`.

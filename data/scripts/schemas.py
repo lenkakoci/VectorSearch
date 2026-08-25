@@ -18,11 +18,14 @@ deliberately loose:
 Bumping ``SCHEMA_VERSION`` makes ``ingest.py`` re-extract every document from the
 cached Markdown - no PDF re-parsing, no data loss.
 
-Structured-output constraints (OpenAI strict mode):
-- No ``dict[str, str]``: an object with open ``additionalProperties`` is rejected.
-  Hence ``list[ExtraField]``.
+Structured-output constraints (Gemini ``response_schema``):
+- No ``dict[str, str]``: Gemini's schema dialect has no open-ended object with
+  free-form keys. Hence ``list[ExtraField]``.
 - No Pydantic defaults: every field is required. The model returns an empty list
   or ``null`` rather than omitting a key.
+
+The model class is passed straight to ``types.GenerateContentConfig(
+response_schema=...)`` and comes back validated as ``response.parsed``.
 """
 
 from __future__ import annotations

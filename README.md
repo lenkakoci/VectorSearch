@@ -12,7 +12,7 @@ PDF → Markdown → LLM strukturovaná extrakce → chunking → embedding → 
 
 - Docker Desktop
 - [uv](https://docs.astral.sh/uv/)
-- Přístup k OpenAI nebo Azure OpenAI (API klíč, nebo Entra ID pro Azure)
+- API klíč pro Google Gemini — <https://aistudio.google.com/apikey>
 
 ## Quickstart
 
@@ -26,7 +26,7 @@ docker compose ps                   # počkat na healthy
 # 2) Závislosti a konfigurace
 cd ..\..\data\scripts
 uv sync
-Copy-Item .env.template .env        # doplnit OPENAI_API_KEY a PGPASSWORD
+Copy-Item .env.template .env        # doplnit GEMINI_API_KEY a PGPASSWORD
 
 # 3) Schéma databáze (idempotentní, lze spouštět opakovaně)
 uv run python configure_postgresql.py
@@ -90,7 +90,7 @@ uv run python ingest.py --dry-run                  # co by se stalo
 specifická pole žijí v `extraction_json JSONB`, dokud se schéma nedoladí podle
 reálných posudků.
 
-**`document_chunks`** — jeden řádek na chunk. `embedding vector(2000)` s HNSW
+**`document_chunks`** — jeden řádek na chunk. `embedding vector(1536)` s HNSW
 indexem pro cosine similarity, `fts_chunk tsvector` s GIN indexem pro full-text.
 Citační jednotkou je `section` (cesta Markdown nadpisů), `page_from`/`page_to`
 jsou best-effort a mohou být `NULL`.

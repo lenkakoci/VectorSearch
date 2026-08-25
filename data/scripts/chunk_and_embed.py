@@ -4,8 +4,12 @@
         --> processed/chunks/<stem>.parquet
 
 Retry/backoff and batching follow the reference project's
-``embeddings_simple_products.py``: tenacity with exponential wait, explicit
-respect for the ``Retry-After`` header on 429, batches of 100.
+``embeddings_simple_products.py``: tenacity with exponential wait on rate limits
+and transient server errors, batches of 100.
+
+Embeddings come from Gemini via the native ``google-genai`` SDK, using
+``task_type=RETRIEVAL_DOCUMENT`` so the corpus side of the retrieval pair is
+encoded correctly; ``search_reports.py`` uses RETRIEVAL_QUERY for the other side.
 
 Two deliberate differences from the reference project:
 
@@ -27,16 +31,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
-import time
 import uuid
 from pathlib import Path
 from typing import Any, Sequence
 
 import pandas as pd
-from openai import APIStatusError, OpenAI, RateLimitError
-from openai_auth import create_openai_client
+from google import genai
+from google.genai import types
+from gemini_auth import create_gemini_client, is_retryable_error, normalize
 from tenacity import (
     before_sleep_log,
     retry,
@@ -78,32 +81,17 @@ PARQUET_COLUMNS = [
 ]
 
 
-def _is_retryable_error(exc: BaseException) -> bool:
-    """Return True for rate limit and transient server errors."""
-    if isinstance(exc, RateLimitError):
-        return True
-    if isinstance(exc, APIStatusError):
-        return exc.status_code == 429 or 500 <= (exc.status_code or 0) < 600
-    return False
-
-
 class EmbeddingsGenerator:
     """Batch embedding generation with retries and progress logging."""
 
     def __init__(self, *, model: str, dimensions: int, batch_size: int):
-        """Build a unified OpenAI client for embeddings."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        api_version = os.getenv("OPENAI_API_VERSION") or "preview"
-        self.client: OpenAI = create_openai_client(
-            api_key=api_key, base_url=base_url, api_version=api_version
-        )
+        """Build a Gemini client for embeddings."""
+        self.client: genai.Client = create_gemini_client()
         self.model = model
         self.dimensions = dimensions
         self.batch_size = max(1, batch_size)
         logger.info(
-            "Embeddings client ready (base_url=%s, model=%s, dims=%d)",
-            getattr(self.client, "base_url", None),
+            "Embeddings client ready (model=%s, dims=%d, task=RETRIEVAL_DOCUMENT)",
             self.model,
             self.dimensions,
         )
@@ -111,27 +99,30 @@ class EmbeddingsGenerator:
     @retry(
         stop=stop_after_attempt(6),
         wait=wait_exponential(multiplier=1, min=2, max=90),
-        retry=retry_if_exception(_is_retryable_error),
+        retry=retry_if_exception(is_retryable_error),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
     def _embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
-        """Embed one batch, honouring Retry-After when rate limited."""
-        try:
-            response = self.client.embeddings.create(
-                model=self.model, input=list(texts), dimensions=self.dimensions
-            )
-            return [item.embedding for item in response.data]
-        except APIStatusError as exc:
-            if exc.status_code == 429:
-                try:
-                    retry_after = int(exc.response.headers.get("retry-after", "0")) if exc.response else 0
-                except (TypeError, ValueError):
-                    retry_after = 0
-                if retry_after > 0:
-                    logger.warning("429 received. Sleeping %s seconds per Retry-After", retry_after)
-                    time.sleep(retry_after)
-            raise
+        """Embed one batch of chunk texts.
+
+        ``task_type=RETRIEVAL_DOCUMENT`` tells Gemini these are corpus documents
+        rather than queries; the query side uses RETRIEVAL_QUERY. Matching the
+        pair meaningfully improves retrieval quality and has no OpenAI analogue.
+
+        ``auto_truncate=False`` makes oversized input fail loudly instead of
+        silently losing the tail of a chunk, which would quietly degrade recall.
+        """
+        response = self.client.models.embed_content(
+            model=self.model,
+            contents=list(texts),
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_DOCUMENT",
+                output_dimensionality=self.dimensions,
+                auto_truncate=False,
+            ),
+        )
+        return [normalize(item.values) for item in response.embeddings]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed all texts in batches."""

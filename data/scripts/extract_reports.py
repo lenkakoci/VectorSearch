@@ -28,8 +28,16 @@ import sys
 import uuid
 from pathlib import Path
 
-from openai import OpenAI
-from openai_auth import create_openai_client
+from google import genai
+from google.genai import types
+from gemini_auth import create_gemini_client, is_retryable_error
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from manifest import Manifest, file_sha256, timestamp_key, utc_now
 from pipeline_common import (
@@ -57,14 +65,10 @@ def document_id_for(key: str) -> str:
     return str(uuid.uuid5(_DOCUMENT_NAMESPACE, key))
 
 
-def build_client() -> tuple[OpenAI, str]:
-    """Build a unified OpenAI client and resolve the extraction model."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    api_version = os.getenv("OPENAI_API_VERSION") or "preview"
-    model = os.getenv("OPENAI_MODEL", "gpt-5.4")
-    client = create_openai_client(api_key=api_key, base_url=base_url, api_version=api_version)
-    return client, model
+def build_client() -> tuple[genai.Client, str]:
+    """Build a Gemini client and resolve the extraction model."""
+    model = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
+    return create_gemini_client(), model
 
 
 def to_markdown(path: Path) -> str:
@@ -103,30 +107,46 @@ def page_texts(path: Path) -> list[str]:
         return []
 
 
-def extract_metadata(client: OpenAI, model: str, markdown: str) -> dict:
-    """Call the Responses API for grounded structured extraction."""
-    response = client.responses.parse(
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    retry=retry_if_exception(is_retryable_error),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def extract_metadata(client: genai.Client, model: str, markdown: str) -> dict:
+    """Call Gemini for grounded structured extraction.
+
+    ``response_schema`` binds the Pydantic model directly, so ``response.parsed``
+    comes back as a validated ``GeologicalReport``.
+    """
+    response = client.models.generate_content(
         model=model,
-        instructions=EXTRACTION_INSTRUCTIONS,
-        input=(
+        contents=(
             "Zde je uplny text geologickeho posudku prevedeny do Markdownu.\n"
             "Vytahni z nej metadata podle schematu.\n\n"
             "<dokument>\n"
             f"{markdown}\n"
             "</dokument>"
         ),
-        text_format=GeologicalReport,
+        config=types.GenerateContentConfig(
+            system_instruction=EXTRACTION_INSTRUCTIONS,
+            response_mime_type="application/json",
+            response_schema=GeologicalReport,
+            # Extraction must be reproducible, not creative.
+            temperature=0.0,
+        ),
     )
-    parsed: GeologicalReport | None = getattr(response, "output_parsed", None)
-    if parsed is None:
-        raise RuntimeError("Model did not return a parsable GeologicalReport")
+    parsed = response.parsed
+    if not isinstance(parsed, GeologicalReport):
+        raise RuntimeError(f"Gemini did not return a parsable GeologicalReport: {parsed!r}")
     return parsed.model_dump()
 
 
 def process_one(
     path: Path,
     *,
-    client: OpenAI | None,
+    client: genai.Client | None,
     model: str,
     manifest: Manifest,
     markdown_only: bool,
@@ -178,7 +198,7 @@ def process_one(
         return False
 
     if client is None:
-        raise RuntimeError("OpenAI client required for extraction")
+        raise RuntimeError("Gemini client required for extraction")
 
     logger.info(
         "Extracting metadata from %s (model=%s, schema=v%d)", path.name, model, SCHEMA_VERSION
@@ -271,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning("No source files found in %s", settings.input_dir)
         return 0
 
-    client: OpenAI | None = None
+    client: genai.Client | None = None
     model = settings.extraction_model
     if not args.markdown_only:
         client, model = build_client()

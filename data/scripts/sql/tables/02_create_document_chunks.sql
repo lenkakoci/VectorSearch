@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS public.document_chunks (
     chunk_text  TEXT NOT NULL,
     token_count INT,
 
-    -- 2000 is the maximum dimensionality a pgvector HNSW index supports.
-    embedding   vector(2000),
+    -- Gemini supports 128-3072 dimensions (recommended tiers 768/1536/3072) but a
+    -- pgvector HNSW index accepts at most 2000, so 3072 is not usable here.
+    -- 1536 is the largest recommended tier that fits. Must match
+    -- EMBEDDING_DIMENSIONS in .env; changing it requires recreating this table.
+    embedding   vector(1536),
 
     -- Maintained by trigger, not GENERATED: unaccent() is STABLE, not IMMUTABLE.
     fts_chunk   tsvector NOT NULL DEFAULT to_tsvector('simple', ''),

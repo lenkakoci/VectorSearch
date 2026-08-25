@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from typing import Any
 
 import psycopg2
-from openai_auth import create_openai_client
+from google.genai import types
+from gemini_auth import create_gemini_client, normalize
 
 from pipeline_common import configure_logging, load_connection_params, load_settings
 
@@ -58,14 +58,22 @@ LIMIT %s
 
 
 def embed_query(text: str, model: str, dimensions: int) -> list[float]:
-    """Embed the query with the same model and dimensionality as the corpus."""
-    client = create_openai_client(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL"),
-        api_version=os.getenv("OPENAI_API_VERSION") or "preview",
+    """Embed the query with the same model and dimensionality as the corpus.
+
+    ``task_type=RETRIEVAL_QUERY`` is the counterpart to RETRIEVAL_DOCUMENT used
+    when embedding chunks. Both sides of the pair must match, otherwise the query
+    lands in a different region of the embedding space than the corpus.
+    """
+    client = create_gemini_client()
+    response = client.models.embed_content(
+        model=model,
+        contents=text,
+        config=types.EmbedContentConfig(
+            task_type="RETRIEVAL_QUERY",
+            output_dimensionality=dimensions,
+        ),
     )
-    response = client.embeddings.create(model=model, input=[text], dimensions=dimensions)
-    return response.data[0].embedding
+    return normalize(response.embeddings[0].values)
 
 
 def to_pgvector(values: list[float]) -> str:

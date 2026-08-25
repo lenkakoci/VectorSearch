@@ -50,5 +50,5 @@ time. Stop the other one before starting this.
 | `no pg_hba.conf entry` / `database "geodb" does not exist` | Cluster init was interrupted. Stop the container, remove `deploy/local/data/postgres`, start again. Only safe when nothing has been imported yet. |
 | `relation "documents" does not exist` | `configure_postgresql.py` has not run. |
 | Port 5432 already allocated | Another PostgreSQL container is running. |
-| `OPENAI_API_KEY is required` | `data/scripts/.env` is missing credentials. |
+| `GEMINI_API_KEY is required` | `data/scripts/.env` is missing credentials. |
 | Nothing happens on ingest | Everything is up to date. Use `--dry-run` to see the plan, `--force` to override. |

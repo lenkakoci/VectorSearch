@@ -40,7 +40,7 @@ def configure_logging() -> None:
 
     level = os.getenv("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s")
-    for noisy in ("openai", "httpx", "httpcore", "markitdown", "pdfminer"):
+    for noisy in ("google_genai", "google", "httpx", "httpcore", "markitdown", "pdfminer"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -91,9 +91,9 @@ def load_settings() -> Settings:
 
     return Settings(
         input_dir=input_dir,
-        extraction_model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
-        embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-large"),
-        embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "2000")),
+        extraction_model=os.getenv("GEMINI_MODEL", "gemini-3.7-flash"),
+        embedding_model=os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"),
+        embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "1536")),
         embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "100")),
         chunk_max_tokens=int(os.getenv("CHUNK_MAX_TOKENS", "800")),
         chunk_overlap_tokens=int(os.getenv("CHUNK_OVERLAP_TOKENS", "100")),

@@ -20,7 +20,7 @@ Strategy, in order:
 500 tokens a borehole profile description splits across chunks.
 
 This module makes no API calls and touches no database, so chunk parameters can
-be tuned without an OpenAI key.
+be tuned without a Gemini API key.
 """
 
 from __future__ import annotations
@@ -30,7 +30,12 @@ from dataclasses import dataclass
 
 import tiktoken
 
-# cl100k_base is close enough to the text-embedding-3-* tokenizer for sizing.
+# Local, offline, deterministic tokenizer used only to size chunks. It is NOT
+# Gemini's tokenizer, so counts are approximate - expect Gemini to count roughly
+# 10-30% more tokens on Czech text. That is fine here: the target is 800 tokens
+# and gemini-embedding-001 accepts 2048, so the margin absorbs the drift. The
+# alternative, client.models.count_tokens(), is a billable API round trip per
+# chunk and would make chunk tuning slow and expensive.
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")

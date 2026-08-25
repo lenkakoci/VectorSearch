@@ -10,7 +10,8 @@ uv sync
 Copy-Item .env.template .env
 ```
 
-Fill in `OPENAI_API_KEY` (or configure Azure/Entra) and `PGPASSWORD`. Never commit `.env`.
+Fill in `GEMINI_API_KEY` (get one at <https://aistudio.google.com/apikey>) and
+`PGPASSWORD`. Never commit `.env`.
 
 ## Normal use
 
@@ -24,7 +25,7 @@ uv run python search_reports.py "dotaz" --hybrid
 
 | Script | Role |
 | --- | --- |
-| `openai_auth.py` | Unified OpenAI / Azure OpenAI / Entra ID client. Taken verbatim from the reference project — do not modify. |
+| `gemini_auth.py` | Gemini client construction, retry predicate, and L2 normalisation of embeddings. |
 | `configure_postgresql.py` | Generic SQL runner over `sql/extensions/` and `sql/tables/`. Taken verbatim. |
 | `schemas.py` | Pydantic extraction schema, `SCHEMA_VERSION`, grounding prompt. |
 | `manifest.py` | Pipeline state and stage-invalidation logic. |
@@ -55,8 +56,8 @@ uv run python chunk_and_embed.py --dry-run         # no embedding calls
 | Change | Re-runs |
 | --- | --- |
 | source file sha256 | everything from PDF → Markdown |
-| `SCHEMA_VERSION` or `OPENAI_MODEL` | extract → chunk → embed → import |
-| `CHUNK_*` or `OPENAI_EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` | chunk → embed → import |
+| `SCHEMA_VERSION` or `GEMINI_MODEL` | extract → chunk → embed → import |
+| `CHUNK_*` or `GEMINI_EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` | chunk → embed → import |
 | nothing | file is skipped |
 
 Deleting `manifest.json` forces a full reprocess on the next run.
@@ -75,9 +76,15 @@ uv run python -c "from chunker import chunk_markdown; import pathlib; cs = chunk
 
 ## Notes
 
-- `EMBEDDING_DIMENSIONS` must stay at 2000: that is the maximum a pgvector HNSW
-  index supports. Changing it also requires editing `vector(2000)` in
-  `sql/tables/02_create_document_chunks.sql`.
+- `EMBEDDING_DIMENSIONS` is 1536. Gemini offers 128-3072 (recommended tiers
+  768 / 1536 / 3072) but a pgvector HNSW index accepts at most 2000, so 3072 is
+  not usable. Changing this also requires editing `vector(1536)` in
+  `sql/tables/02_create_document_chunks.sql` and recreating the table.
+- Chunks are embedded with `task_type=RETRIEVAL_DOCUMENT` and queries with
+  `RETRIEVAL_QUERY`. Both sides must match or retrieval quality collapses.
+- `tiktoken` sizes chunks locally and is not Gemini's tokenizer, so counts are
+  approximate. The 800-token target leaves ample margin under the 2048-token
+  input limit of `gemini-embedding-001`.
 - Parquet is written per document. A new report costs one new file, not a full
   cache regeneration.
 - `../processed/` is a reproducible cache. Regenerate it instead of editing it.

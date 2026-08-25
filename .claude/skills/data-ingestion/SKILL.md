@@ -12,7 +12,7 @@ Load this skill when touching anything in `data/scripts/`.
 | Stage | Script | Input | Output | Invalidated by |
 | --- | --- | --- | --- | --- |
 | markdown | `extract_reports.py` | `data/PDFs/*.pdf` | `processed/markdown/<stem>.md` | source sha256 |
-| extract | `extract_reports.py` | cached Markdown | `processed/extracted/<stem>.json` | `SCHEMA_VERSION`, `OPENAI_MODEL` |
+| extract | `extract_reports.py` | cached Markdown | `processed/extracted/<stem>.json` | `SCHEMA_VERSION`, `GEMINI_MODEL` |
 | chunk | `chunk_and_embed.py` | Markdown + extraction | `processed/chunks/<stem>.parquet` | chunk params, embedding model/dims |
 | import | `import_reports.py` | JSON + parquet | `documents`, `document_chunks` | any of the above |
 
@@ -25,8 +25,9 @@ only the stale stages, cascading forward. Stages are also runnable standalone.
 - `manifest.py` — `stages_to_run()` holds the invalidation logic. Change carefully.
 - `chunker.py` — pure function, no API or database. Testable without credentials.
 - `pipeline_common.py` — settings, paths, connection params. Add config here, not per-script.
-- `openai_auth.py`, `configure_postgresql.py` — taken verbatim from the reference
-  course project. **Do not modify**; re-copy if upstream changes.
+- `gemini_auth.py` — client construction, retry predicate, embedding normalisation.
+- `configure_postgresql.py` — taken verbatim from the reference course project.
+  **Do not modify**; re-copy if upstream changes.
 
 ## Evolving the extraction schema
 
@@ -60,10 +61,14 @@ provisional — it was written before real reports existed.
 
 ## Structured output constraints
 
-OpenAI strict mode rejects objects with open `additionalProperties`, so
-`extra_fields` is `list[ExtraField]`, not `dict[str, str]`. Every field is
+Gemini's `response_schema` dialect has no open-ended object with free-form keys,
+so `extra_fields` is `list[ExtraField]`, not `dict[str, str]`. Every field is
 required — the model returns `null` or `[]` rather than omitting a key. Do not
 add Pydantic defaults.
+
+The Pydantic class is passed straight to `types.GenerateContentConfig(
+response_schema=...)` and returns validated as `response.parsed`. Extraction runs
+at `temperature=0.0` for reproducibility.
 
 ## Grounding
 
