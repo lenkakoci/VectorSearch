@@ -48,7 +48,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from chunker import Chunk, chunk_markdown
+from chunker import Chunk, chunk_markdown, count_tokens
 from manifest import Manifest, timestamp_key, utc_now
 from pipeline_common import (
     CHUNKS_DIR,
@@ -66,6 +66,11 @@ logger = logging.getLogger(__name__)
 
 # Stable namespace so a chunk keeps its UUID across re-runs with equal parameters.
 _CHUNK_NAMESPACE = uuid.UUID("2d4a7f61-93b8-4e05-8c7a-1f6d0b39e254")
+
+# gemini-embedding-001 accepts about 2048 input tokens. tiktoken undercounts
+# Czech relative to Gemini, so warn well below the limit rather than at it.
+_INPUT_TOKEN_LIMIT = 2048
+_INPUT_TOKEN_WARN = 1500
 
 PARQUET_COLUMNS = [
     "document_id",
@@ -110,8 +115,11 @@ class EmbeddingsGenerator:
         rather than queries; the query side uses RETRIEVAL_QUERY. Matching the
         pair meaningfully improves retrieval quality and has no OpenAI analogue.
 
-        ``auto_truncate=False`` makes oversized input fail loudly instead of
-        silently losing the tail of a chunk, which would quietly degrade recall.
+        ``auto_truncate`` is deliberately not set: the Developer API (API key)
+        rejects it as a Vertex-only parameter. Oversized input therefore surfaces
+        as an API error, which is the behaviour we wanted anyway - a silently
+        truncated chunk would quietly degrade recall. ``embed()`` warns before
+        the call when a text looks close to the model's input limit.
         """
         response = self.client.models.embed_content(
             model=self.model,
@@ -119,13 +127,24 @@ class EmbeddingsGenerator:
             config=types.EmbedContentConfig(
                 task_type="RETRIEVAL_DOCUMENT",
                 output_dimensionality=self.dimensions,
-                auto_truncate=False,
             ),
         )
         return [normalize(item.values) for item in response.embeddings]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        """Embed all texts in batches."""
+        """Embed all texts in batches, warning about ones near the input limit."""
+        for index, text in enumerate(texts):
+            tokens = count_tokens(text)
+            if tokens > _INPUT_TOKEN_WARN:
+                logger.warning(
+                    "Chunk %d is %d tokens (local estimate); %s accepts about %d. "
+                    "Lower CHUNK_MAX_TOKENS if the request fails.",
+                    index,
+                    tokens,
+                    self.model,
+                    _INPUT_TOKEN_LIMIT,
+                )
+
         vectors: list[list[float]] = []
         total = len(texts)
         for start in range(0, total, self.batch_size):
