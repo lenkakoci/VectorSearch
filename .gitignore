@@ -1,0 +1,55 @@
+# Secrets - never commit
+.env
+*.env
+!*.env.template
+
+# Source reports are internal organisation documents - never commit
+data/PDFs/*
+!data/PDFs/.gitkeep
+
+# Reproducible cache - regenerate instead of committing
+data/processed/
+
+# Local PostgreSQL data directory (bind mount)
+deploy/local/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+.venv
+env/
+venv/
+ENV/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+.ipynb_checkpoints
+*.log
+
+# Editors / OS
+.vscode/settings.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+[project]
+name = "geo-report-scripts"
+version = "0.1.0"
+description = "Extraction, chunking, embedding and import pipeline for digital geological reports"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.101.0,<2.0.0",
+    "azure-identity>=1.17.0",
+    "pandas>=2.3.1",
+    "python-dotenv>=1.1.1",
+    "pydantic>=2.0.0",
+    "pyarrow>=18.0.0",
+    "tenacity>=9.0.0",
+    "psycopg2-binary>=2.9.0",
+    "numpy>=1.24.0",
+    # PDF -> Markdown conversion (pdf extra pulls the PDF backend)
+    "markitdown[pdf]>=0.0.1",
+    # Token counting for the chunker
+    "tiktoken>=0.8.0",
+    # Per-page text extraction for best-effort page ranges
+    "pypdf>=5.1.0",
+]

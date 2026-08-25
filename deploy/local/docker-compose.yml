@@ -1,0 +1,28 @@
+# Explicit project name. Without it Compose derives the name from the parent
+# directory ("local"), which collides with any other project laid out the same
+# way and makes Compose recycle that project's containers.
+name: vectorsearch
+
+services:
+  postgres:
+    build:
+      context: ../../postgres
+    image: vectorsearch/postgres:17-pgvector
+    environment:
+      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      # Bind mount so report data survives container recreation.
+      # Never remove this directory without explicit approval - it holds real documents.
+      - ./data/postgres:/var/lib/postgresql/data/pgdata
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
