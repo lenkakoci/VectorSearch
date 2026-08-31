@@ -4,6 +4,7 @@ Scans the input folders, diffs each file against the manifest, and runs only the
 stages that are actually stale:
 
     source sha256 changed        -> everything, starting from PDF -> Markdown
+    MARKDOWN_VERSION             -> markdown -> extract -> chunk -> embed -> import
     SCHEMA_VERSION or LLM model  -> extract -> chunk -> embed -> import
     chunk params or embed model  -> chunk -> embed -> import
     nothing changed              -> skip the file
@@ -37,7 +38,9 @@ from pipeline_common import (
     discover_sources,
     ensure_dirs,
     load_settings,
+    resolve_sources,
     source_key,
+    stage_outputs,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +55,9 @@ def build_plan(sources: list[Path], manifest: Manifest, settings, force: bool) -
         if force:
             plan[key] = set(STAGES)
             continue
-        pending = manifest.stages_to_run(key, file_sha256(path), config)
+        pending = manifest.stages_to_run(
+            key, file_sha256(path), config, outputs=stage_outputs(key)
+        )
         if pending:
             plan[key] = pending
     return plan
@@ -74,7 +79,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the incremental report ingestion pipeline.")
     parser.add_argument("--force", action="store_true", help="Reprocess everything from scratch")
     parser.add_argument("--dry-run", action="store_true", help="Show the plan and exit")
-    parser.add_argument("--only", nargs="*", help="Restrict to these files (name or path)")
+    parser.add_argument("--only", nargs="*", help="Restrict to these documents (stem, file name or path)")
     parser.add_argument(
         "--skip-import", action="store_true", help="Stop after embedding, do not touch the database"
     )
@@ -89,18 +94,15 @@ def main(argv: list[str] | None = None) -> int:
     ensure_dirs()
     manifest = Manifest(MANIFEST_PATH)
 
+    extra_dirs = [DATA_DIR / "samples"]
     if args.only:
-        sources = []
-        for item in args.only:
-            candidate = Path(item)
-            if not candidate.exists():
-                candidate = settings.input_dir / item
-            if not candidate.exists():
-                logger.error("Source not found: %s", item)
-                return 1
-            sources.append(candidate)
+        try:
+            sources = resolve_sources(settings, args.only, extra_dirs=extra_dirs)
+        except FileNotFoundError as exc:
+            logger.error("%s", exc)
+            return 1
     else:
-        sources = discover_sources(settings, extra_dirs=[DATA_DIR / "samples"])
+        sources = discover_sources(settings, extra_dirs=extra_dirs)
 
     if not sources:
         logger.warning(

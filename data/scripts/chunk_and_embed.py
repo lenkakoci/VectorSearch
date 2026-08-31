@@ -328,7 +328,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run", action="store_true", help="Chunk and print the plan without calling the API"
     )
-    parser.add_argument("--only", nargs="*", help="Process only these document stems")
+    parser.add_argument("--only", nargs="*", help="Restrict to these documents (stem, file name or path)")
     return parser.parse_args(argv)
 
 
@@ -340,11 +340,16 @@ def main(argv: list[str] | None = None) -> int:
     ensure_dirs()
     manifest = Manifest(MANIFEST_PATH)
 
+    # Match on the stem so that Roudno, Roudno.pdf and PDFs/Roudno.pdf all work -
+    # the source scripts take a file, this one takes a stem, and having to
+    # remember which is which was a trap.
+    wanted = {Path(item).stem for item in args.only} if args.only else None
+
     targets: list[tuple[str, str]] = []
     not_extracted = 0
     for key in manifest.keys():
         stem = Path(key).stem
-        if args.only and stem not in args.only and key not in args.only:
+        if wanted is not None and stem not in wanted:
             continue
         entry = manifest.get(key)
         if not entry.get(timestamp_key("extract")):

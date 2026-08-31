@@ -169,7 +169,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Import geological reports into PostgreSQL.")
     parser.add_argument("--force", action="store_true", help="Re-import even when up to date")
-    parser.add_argument("--only", nargs="*", help="Import only these document stems")
+    parser.add_argument("--only", nargs="*", help="Restrict to these documents (stem, file name or path)")
     return parser.parse_args(argv)
 
 
@@ -179,10 +179,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     manifest = Manifest(MANIFEST_PATH)
 
+    # Stem match, so Roudno, Roudno.pdf and PDFs/Roudno.pdf all select the same
+    # document whichever pipeline script the argument is given to.
+    wanted = {Path(item).stem for item in args.only} if args.only else None
+
     targets: list[tuple[str, str]] = []
     for key in manifest.keys():
         stem = Path(key).stem
-        if args.only and stem not in args.only and key not in args.only:
+        if wanted is not None and stem not in wanted:
             continue
         entry = manifest.get(key)
         if not entry.get(timestamp_key("chunk")):
