@@ -107,8 +107,9 @@ def load_settings() -> Settings:
 def load_connection_params() -> dict:
     """Load PostgreSQL connection parameters from the environment.
 
-    Mirrors the helper used by configure_postgresql.py so every script connects
-    the same way.
+    The single helper every script in this directory connects through,
+    configure_postgresql.py included. PGPASSWORD deliberately has no default: a
+    missing password must fail here rather than quietly reach another database.
     """
     load_dotenv()
     params = {

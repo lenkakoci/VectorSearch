@@ -1,20 +1,23 @@
 """
-Script to configure PostgreSQL database by executing SQL scripts.
+Configure the PostgreSQL database by executing the SQL scripts in sql/.
 
-This script reads SQL files from the sql/ directory and executes them in order
-to set up database extensions, tables, and other structures.
+Extensions are applied first, then tables, alphabetically within each directory.
+Every script is re-runnable, so this can be run again after any SQL change.
+
+Connection parameters come from pipeline_common, the single helper every script
+in this directory connects through. Nothing here carries a credential default:
+a missing PGPASSWORD must fail loudly rather than quietly reach a different
+database.
 """
 
 import logging
-import os
 import sys
 from pathlib import Path
 
 import psycopg2
-from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from pipeline_common import configure_logging, load_connection_params
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,46 +143,15 @@ class PostgreSQLConfigurator:
         return True
 
 
-def load_connection_params() -> dict:
-    """
-    Load PostgreSQL connection parameters from environment variables.
-    
-    Returns:
-        Dictionary with connection parameters
-        
-    Raises:
-        ValueError: If required environment variables are missing
-    """
-    # Load environment variables
-    load_dotenv()
-    
-    # Default connection parameters (matching docker-compose.yml)
-    connection_params = {
-        'host': os.getenv('PGHOST', 'localhost'),
-        'port': int(os.getenv('PGPORT', 5432)),
-        'database': os.getenv('PGDATABASE', 'aidb'),
-        'user': os.getenv('PGUSER', 'admin'),
-        'password': os.getenv('PGPASSWORD', 'Admin12345678')
-    }
-    
-    # Validate required parameters
-    required_params = ['host', 'port', 'database', 'user', 'password']
-    missing_params = [param for param in required_params if not connection_params.get(param)]
-    
-    if missing_params:
-        raise ValueError(f"Missing required connection parameters: {missing_params}")
-    
-    return connection_params
-
-
 def main():
     """Main function to configure PostgreSQL database."""
+    configure_logging()
     try:
         logger.info("Starting PostgreSQL configuration")
         
         # Load connection parameters
         connection_params = load_connection_params()
-        logger.info(f"Connecting to PostgreSQL at {connection_params['host']}:{connection_params['port']}")
+        logger.info(f"Connecting to PostgreSQL at {connection_params['host']}:{connection_params['port']}/{connection_params['database']}")
         
         # Initialize configurator
         configurator = PostgreSQLConfigurator(connection_params)
