@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from manifest import PipelineConfig, chunk_params_hash
+from markdown_normalizer import MARKDOWN_VERSION
 from schemas import SCHEMA_VERSION
 
 SCRIPTS_DIR = Path(__file__).parent
@@ -61,6 +62,7 @@ class Settings:
     def pipeline_config(self) -> PipelineConfig:
         """Return the parameter set whose change forces re-processing."""
         return PipelineConfig(
+            markdown_version=MARKDOWN_VERSION,
             schema_version=SCHEMA_VERSION,
             extraction_model=self.extraction_model,
             embedding_model=self.embedding_model,
@@ -139,6 +141,50 @@ def discover_sources(settings: Settings, extra_dirs: list[Path] | None = None) -
             if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
                 found.append(path)
     return found
+
+
+def stage_outputs(key: str) -> dict[str, Path]:
+    """Return the file each stage produces for a source key.
+
+    ``import`` is absent on purpose - its result lives in the database, not on
+    disk. Re-running ``chunk`` cascades into it anyway.
+    """
+    stem = Path(key).stem
+    return {
+        "markdown": MARKDOWN_DIR / f"{stem}.md",
+        "extract": EXTRACTED_DIR / f"{stem}.json",
+        "chunk": CHUNKS_DIR / f"{stem}.parquet",
+    }
+
+
+def resolve_sources(
+    settings: Settings, items: list[str], extra_dirs: list[Path] | None = None
+) -> list[Path]:
+    """Resolve ``--only`` arguments to source files.
+
+    Accepts a path, a file name, or the bare stem, so that the same argument
+    works whichever script it is given to. The stage scripts key off the stem
+    while the source scripts key off the file, and having to remember which
+    wanted ``Roudno`` and which wanted ``Roudno.pdf`` was a trap.
+    """
+    available = discover_sources(settings, extra_dirs=extra_dirs)
+    by_name = {path.name: path for path in available}
+    by_stem = {path.stem: path for path in available}
+
+    resolved: list[Path] = []
+    for item in items:
+        candidate = Path(item)
+        if not candidate.exists():
+            candidate = settings.input_dir / item
+        if candidate.exists() and candidate.is_file():
+            resolved.append(candidate)
+            continue
+
+        match = by_name.get(item) or by_stem.get(item) or by_stem.get(Path(item).stem)
+        if match is None:
+            raise FileNotFoundError(f"Source not found: {item}")
+        resolved.append(match)
+    return resolved
 
 
 def source_key(path: Path) -> str:

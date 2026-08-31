@@ -5,6 +5,7 @@ which parameters. ``ingest.py`` diffs the manifest against the current
 configuration to decide which stages need to re-run:
 
     source sha256 changed        -> everything, starting from PDF -> Markdown
+    MARKDOWN_VERSION             -> markdown -> extract -> chunk -> embed -> import
     SCHEMA_VERSION or LLM model  -> extract -> chunk -> embed -> import
     chunk params or embed model  -> chunk -> embed -> import
     nothing changed              -> skip the file
@@ -59,6 +60,7 @@ def chunk_params_hash(max_tokens: int, overlap: int, min_tokens: int, contextual
 class PipelineConfig:
     """Parameters whose change forces re-processing."""
 
+    markdown_version: int
     schema_version: int
     extraction_model: str
     embedding_model: str
@@ -101,10 +103,22 @@ class Manifest:
             encoding="utf-8",
         )
 
-    def stages_to_run(self, key: str, sha256: str, config: PipelineConfig) -> set[str]:
+    def stages_to_run(
+        self,
+        key: str,
+        sha256: str,
+        config: PipelineConfig,
+        outputs: dict[str, Path] | None = None,
+    ) -> set[str]:
         """Return the set of stages that must run for ``key``.
 
         Stages cascade: invalidating an early stage invalidates all later ones.
+
+        ``outputs`` maps a stage to the file it produces. A stage whose file is
+        gone counts as stale however recent its timestamp: ``processed/`` is a
+        cache and deleting part of it to force a rebuild is a reasonable thing to
+        do, but the timestamps alone cannot see that and would report the work as
+        already done.
         """
         entry = self.get(key)
         if not entry:
@@ -115,7 +129,9 @@ class Manifest:
 
         stale_from: int | None = None
 
-        if (
+        if entry.get("markdown_version") != config.markdown_version:
+            stale_from = STAGES.index("markdown")
+        elif (
             entry.get("extraction_schema_version") != config.schema_version
             or entry.get("extraction_model") != config.extraction_model
         ):
@@ -130,7 +146,9 @@ class Manifest:
         pending = set()
         for index, stage in enumerate(STAGES):
             done = entry.get(_timestamp_key(stage))
-            if not done or (stale_from is not None and index >= stale_from):
+            output = (outputs or {}).get(stage)
+            missing = output is not None and not output.exists()
+            if not done or missing or (stale_from is not None and index >= stale_from):
                 pending.add(stage)
 
         # Cascade: once a stage runs, everything after it must run too.

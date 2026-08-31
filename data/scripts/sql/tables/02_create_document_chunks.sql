@@ -68,4 +68,4 @@ COMMENT ON COLUMN public.document_chunks.chunk_text IS
 COMMENT ON COLUMN public.document_chunks.section IS
     'Markdown heading path the chunk came from. Primary citation unit.';
 COMMENT ON COLUMN public.document_chunks.page_from IS
-    'Best-effort source page, resolved via pypdf text matching. NULL when unresolved.';
+    'Best-effort source page, matched against the pdfminer page text the chunk was cut from. NULL when unresolved.';

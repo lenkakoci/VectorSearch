@@ -1,12 +1,25 @@
 """Convert reports to Markdown and extract structured metadata with an LLM.
 
-    PDF --MarkItDown--> processed/markdown/<stem>.md --LLM--> processed/extracted/<stem>.json
+    PDF --pdfminer--> normalise --> processed/markdown/<stem>.md
+        --LLM--> processed/extracted/<stem>.json
 
 Unlike the reference project's ``process_pdfs.py`` (which only prints to the
 console), this persists every intermediate result. That matters because the two
-expensive operations have different lifetimes: Markdown conversion depends only
-on the source file, while extraction depends on SCHEMA_VERSION and the model.
-Bumping the schema re-extracts from cached Markdown without re-parsing any PDF.
+expensive operations have different lifetimes: Markdown conversion depends on
+the source file and MARKDOWN_VERSION, while extraction depends on
+SCHEMA_VERSION and the model. Bumping the schema re-extracts from cached
+Markdown without re-parsing any PDF.
+
+The text is read page by page with pdfminer, and that one pass feeds both the
+Markdown and the page map. Two engines used to read the same PDF - MarkItDown
+(pdfplumber inside) for the text and pypdf for the pages - and ``locate_pages()``
+then compared two different transcriptions of one file, which resolved a page
+for only 63% of chunks. One engine puts that at 98%. pdfplumber also invented
+pipe tables out of multi-column layout and mangled accented glyphs on documents
+pdfminer reads correctly.
+
+Raw page text has no headings, which costs every chunk its section citation;
+``markdown_normalizer`` rebuilds the structure before the Markdown is cached.
 
 Markdown files are accepted as input too, which covers both the test fixture and
 re-extraction from cache.
@@ -21,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import json
 import logging
 import os
@@ -30,6 +44,10 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
+from pdfminer.converter import TextConverter
+from pdfminer.layout import LAParams
+from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
+from pdfminer.pdfpage import PDFPage
 from gemini_auth import create_gemini_client, is_retryable_error
 from tenacity import (
     before_sleep_log,
@@ -40,6 +58,7 @@ from tenacity import (
 )
 
 from manifest import Manifest, file_sha256, timestamp_key, utc_now
+from markdown_normalizer import MARKDOWN_VERSION, NormalizationStats, normalize_markdown
 from pipeline_common import (
     DATA_DIR,
     EXTRACTED_DIR,
@@ -50,6 +69,7 @@ from pipeline_common import (
     discover_sources,
     ensure_dirs,
     load_settings,
+    resolve_sources,
     source_key,
 )
 from schemas import EXTRACTION_INSTRUCTIONS, SCHEMA_VERSION, GeologicalReport
@@ -71,40 +91,45 @@ def build_client() -> tuple[genai.Client, str]:
     return create_gemini_client(), model
 
 
-def to_markdown(path: Path) -> str:
-    """Convert a source file to Markdown.
+def pdf_pages(path: Path) -> list[str]:
+    """Return the text of a PDF, one string per page.
 
-    Markdown inputs pass through unchanged; PDFs go through MarkItDown.
-    """
-    if path.suffix.lower() in {".md", ".markdown"}:
-        return path.read_text(encoding="utf-8")
+    This is the single source of truth for both the Markdown and the page map,
+    so the text ``locate_pages()`` searches is the very text the chunks were cut
+    from. Empty list for non-PDF inputs.
 
-    from markitdown import MarkItDown
-
-    result = MarkItDown().convert(path)
-    content = (
-        getattr(result, "text_content", None)
-        or getattr(result, "text", None)
-        or getattr(result, "markdown", "")
-    )
-    return content or ""
-
-
-def page_texts(path: Path) -> list[str]:
-    """Return per-page text for a PDF, used for best-effort page attribution.
-
-    Returns an empty list for non-PDF inputs or when extraction fails - page
-    ranges are a nice-to-have, never a hard requirement.
+    One file handle drives every page rather than calling
+    ``pdfminer.high_level.extract_text(page_numbers=[i])`` per page, which
+    re-parses the whole document each time. Output is byte-identical; it is
+    about twice as fast on an 18-page report and the gap widens with length.
     """
     if path.suffix.lower() != ".pdf":
         return []
-    try:
-        from pypdf import PdfReader
 
-        return [(page.extract_text() or "") for page in PdfReader(str(path)).pages]
-    except Exception as exc:  # noqa: BLE001 - page numbers are optional
-        logger.warning("Could not build page map for %s: %s", path.name, exc)
-        return []
+    pages: list[str] = []
+    with path.open("rb") as handle:
+        manager = PDFResourceManager()
+        for page in PDFPage.get_pages(handle):
+            buffer = io.StringIO()
+            device = TextConverter(manager, buffer, laparams=LAParams())
+            PDFPageInterpreter(manager, device).process_page(page)
+            device.close()
+            pages.append(buffer.getvalue())
+    return pages
+
+
+def to_markdown(path: Path, pages: list[str]) -> tuple[str, NormalizationStats | None]:
+    """Build Markdown for a source file.
+
+    Markdown inputs pass through unchanged - they are hand-written and already
+    carry headings. PDFs are assembled from ``pages`` and normalised. Returns the
+    Markdown and, for PDFs, what the normaliser changed.
+    """
+    if path.suffix.lower() in {".md", ".markdown"}:
+        return path.read_text(encoding="utf-8"), None
+    if not pages:
+        return "", None
+    return normalize_markdown("\n".join(pages), len(pages))
 
 
 @retry(
@@ -158,16 +183,31 @@ def process_one(
     entry = manifest.get(key)
 
     markdown_path = MARKDOWN_DIR / f"{path.stem}.md"
-    needs_markdown = force or entry.get("sha256") != sha or not markdown_path.exists()
+    needs_markdown = (
+        force
+        or entry.get("sha256") != sha
+        or entry.get("markdown_version") != MARKDOWN_VERSION
+        or not markdown_path.exists()
+    )
 
     if needs_markdown:
         logger.info("Converting %s to Markdown", path.name)
-        markdown = to_markdown(path)
+        pages = pdf_pages(path)
+        markdown, stats = to_markdown(path, pages)
         if not markdown.strip():
             logger.error("Empty Markdown extracted from %s; skipping", path.name)
             return False
+        if stats is not None:
+            logger.info(
+                "  %d headings (%s) | unwrapped %d table rows | dropped %d furniture, %d contents lines",
+                stats.headings,
+                stats.source,
+                stats.tables_unwrapped,
+                stats.furniture_dropped,
+                stats.toc_lines_dropped,
+            )
+        previous = markdown_path.read_text(encoding="utf-8") if markdown_path.exists() else None
         markdown_path.write_text(markdown, encoding="utf-8")
-        pages = page_texts(path)
         if pages:
             _write_page_map(path.stem, pages)
         manifest.update(
@@ -175,9 +215,16 @@ def process_one(
             sha256=sha,
             source_path=path.resolve().as_posix(),
             markdown_path=markdown_path.relative_to(DATA_DIR).as_posix(),
+            markdown_version=MARKDOWN_VERSION,
             page_count=len(pages) or None,
             markdown_at=utc_now(),
         )
+        if previous is not None and previous != markdown:
+            # Everything downstream was derived from text that no longer exists.
+            # Without this a --markdown-only run leaves the database holding
+            # chunks of the previous conversion, and the manifest calls it current.
+            logger.info("  Markdown changed; extraction and chunks are now stale")
+            manifest.update(key, extracted_at=None, chunked_at=None, imported_at=None)
     else:
         markdown = markdown_path.read_text(encoding="utf-8")
 
@@ -255,24 +302,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--force", action="store_true", help="Reprocess even when the manifest says it is current"
     )
-    parser.add_argument("--only", nargs="*", help="Process only these files (name or path)")
+    parser.add_argument("--only", nargs="*", help="Restrict to these documents (stem, file name or path)")
     parser.add_argument("--input-dir", help="Override the input directory")
     return parser.parse_args(argv)
 
 
 def select_sources(settings: Settings, args: argparse.Namespace) -> list[Path]:
     """Resolve which source files to process."""
+    extra_dirs = [DATA_DIR / "samples"]
     if args.only:
-        resolved: list[Path] = []
-        for item in args.only:
-            candidate = Path(item)
-            if not candidate.exists():
-                candidate = settings.input_dir / item
-            if not candidate.exists():
-                raise FileNotFoundError(f"Source not found: {item}")
-            resolved.append(candidate)
-        return resolved
-    return discover_sources(settings, extra_dirs=[DATA_DIR / "samples"])
+        return resolve_sources(settings, args.only, extra_dirs=extra_dirs)
+    return discover_sources(settings, extra_dirs=extra_dirs)
 
 
 def main(argv: list[str] | None = None) -> int:
