@@ -10,11 +10,15 @@ Load this skill when starting, stopping or debugging the local stack.
 ## Compose
 
 Local Compose lives in `deploy/local`. One service: `postgres`, built from
-`postgres/Dockerfile` (`pgvector/pgvector:pg17`).
+`postgres/Dockerfile` (`pgvector/pgvector:pg17` plus the Czech hunspell
+dictionary for full-text search).
+
+The image is not just the base image, so after changing `postgres/Dockerfile` or
+`postgres/tsearch_data/` run `docker compose build postgres` before `up`.
 
 ```powershell
 cd deploy\local
-Copy-Item .env.template .env    # fill in PGPASSWORD
+if (-not (Test-Path .env)) { Copy-Item .env.template .env }   # then fill in PGPASSWORD
 docker compose up -d postgres
 docker compose ps               # wait for healthy
 ```
@@ -34,7 +38,11 @@ time. Stop the other one before starting this.
    `sql/extensions/` then `sql/tables/` alphabetically. Safe to re-run: all DDL
    is `IF NOT EXISTS`.
 3. `uv run python ingest.py` from `data/scripts` — extract, chunk, embed, import.
-4. `uv run python search_reports.py "<dotaz>" --hybrid` to verify.
+4. `uv run python check_pipeline.py` — verifies every stage. Costs nothing.
+5. `uv run python search_reports.py "<dotaz>" --hybrid` to verify.
+
+Adding reports has its own gated procedure — see the `add-reports` skill. Do not
+start with `ingest.py` on documents nobody has looked at.
 
 ## Safety
 
@@ -49,6 +57,7 @@ time. Stop the other one before starting this.
 | --- | --- |
 | `no pg_hba.conf entry` / `database "geodb" does not exist` | Cluster init was interrupted. Stop the container, remove `deploy/local/data/postgres`, start again. Only safe when nothing has been imported yet. |
 | `relation "documents" does not exist` | `configure_postgresql.py` has not run. |
+| `text search configuration "czech" does not exist` | The image was not rebuilt, or `03_create_czech_fts.sql` failed. `docker compose build postgres`, then `configure_postgresql.py`. |
 | Port 5432 already allocated | Another PostgreSQL container is running. |
 | `GEMINI_API_KEY is required` | `data/scripts/.env` is missing credentials. |
 | Nothing happens on ingest | Everything is up to date. Use `--dry-run` to see the plan, `--force` to override. |

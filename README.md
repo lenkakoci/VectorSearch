@@ -8,6 +8,10 @@ PostgreSQL pro sémantické a hybridní vyhledávání.
 PDF → Markdown → LLM strukturovaná extrakce → chunking → embedding → PostgreSQL
 ```
 
+Vyhledávání je hybridní: vektorové (pgvector HNSW) a fulltextové s **českým
+slovníkem**, takže dotaz `vrty` najde i dokument, který píše `vrtů`. Výsledky se
+slučují přes Reciprocal Rank Fusion a citují se na úroveň sekce dokumentu.
+
 ## Předpoklady
 
 - Docker Desktop
@@ -41,20 +45,45 @@ uv run python search_reports.py "hladina podzemní vody" --hybrid
 
 ## Jak přidat nový posudek
 
-Zkopírovat PDF do `data/PDFs/` a spustit:
+Zkopírovat PDF do `data/PDFs/` a projít tímhle postupem. **Konverze a kontrola
+jsou zdarma, extrakce a embeddingy stojí peníze** — proto se nejdřív dívá a
+teprve pak platí.
 
 ```powershell
+# 1) převod na Markdown, bez volání API
+uv run python extract_reports.py --markdown-only
+
+# 2) kontrola převodu, bez API i bez databáze
+uv run python check_pipeline.py --no-db
+
+# 3) teprve když je krok 2 čistý — placené fáze
 uv run python ingest.py
+
+# 4) plná kontrola včetně databáze
+uv run python check_pipeline.py
+
+# 5) zeptat se na něco, co umí zodpovědět jen nový posudek
+uv run python search_reports.py "<termín z nového posudku>" --hybrid
 ```
 
-Pipeline je inkrementální — zpracuje jen nové nebo změněné soubory, ostatní
-přeskočí. `--dry-run` ukáže plán bez provedení, `--force` přepočítá vše.
+Nahrávej po malých dávkách, ne dvacet souborů najednou — kroky 1 a 2 nic nestojí,
+takže cena za to podívat se dřív je jen tvůj čas.
+
+Pipeline je inkrementální: zpracuje jen nové nebo změněné soubory. Chybějící
+soubor v `data/processed/` se počítá jako neaktuální, takže smazat část cache a
+spustit `ingest.py` je legitimní způsob, jak si vynutit přepočet. `--dry-run`
+ukáže plán bez provedení, `--force` přepočítá vše.
+
+**Pozor na jednu mez:** poškozený (ale existující) Markdown pipeline sama
+nepozná, kontroluje jen jeho přítomnost. Právě proto je v postupu krok 2.
+Přegenerovat se dá přes `extract_reports.py --markdown-only --force --only <stem>`.
 
 ## Struktura
 
 | Cesta | Obsah |
 | --- | --- |
-| `postgres/Dockerfile` | PostgreSQL 17 + pgvector |
+| `postgres/Dockerfile` | PostgreSQL 17 + pgvector + český hunspell slovník |
+| `postgres/tsearch_data/` | Česká stopslova pro fulltext |
 | `deploy/local/` | Docker Compose pro lokální běh |
 | `data/PDFs/` | Vstupní posudky — **negitované**, interní dokumenty |
 | `data/samples/` | Testovací fixture pro ověření pipeline |
@@ -73,6 +102,7 @@ Spouštět z `data/scripts`.
 | `extract_reports.py` | PDF → Markdown → strukturovaná extrakce |
 | `chunk_and_embed.py` | Chunking + embeddingy → parquet |
 | `import_reports.py` | Parquet + JSON → PostgreSQL |
+| `check_pipeline.py` | Kontrola všech fází u každého dokumentu |
 | `search_reports.py` | Vyhledávání z příkazové řádky |
 
 Užitečné přepínače:
@@ -81,7 +111,20 @@ Užitečné přepínače:
 uv run python extract_reports.py --markdown-only   # konverze bez LLM volání
 uv run python chunk_and_embed.py --dry-run         # ladění chunků bez placení
 uv run python ingest.py --dry-run                  # co by se stalo
+uv run python check_pipeline.py --no-db            # kontrola bez databáze
 ```
+
+`--only` bere ve všech skriptech stejné tvary — `Roudno`, `Roudno.pdf`
+i `PDFs/Roudno.pdf`.
+
+### Co kontroluje `check_pipeline.py`
+
+Nic nezapisuje, nevolá API, nestojí nic. Návratový kód `1` při chybě. U každého
+dokumentu ověří: počet nadpisů v Markdownu, zbytky po konverzi (obsah, tabulky,
+paginace), mapu stránek, extrakci a její schéma, počet a velikost chunků, že
+**každý** chunk má sekci, podíl chunků s číslem stránky, dimenze embeddingů,
+shodu s databází, naplněný fulltextový index a nakonec zkusí slova ze středu
+dokumentu opravdu vyhledat.
 
 ## Datový model
 
@@ -94,6 +137,23 @@ reálných posudků.
 indexem pro cosine similarity, `fts_chunk tsvector` s GIN indexem pro full-text.
 Citační jednotkou je `section` (cesta Markdown nadpisů), `page_from`/`page_to`
 jsou best-effort a mohou být `NULL`.
+
+## Český fulltext
+
+PostgreSQL nemá český stemmer, takže konfigurace `simple` neuměla skloňování —
+sekce „Technické parametry **vrtů** pro tepelné čerpadlo" se nedala najít dotazem
+„**vrty** pro tepelné čerpadlo". Obraz proto doinstalovává slovník `hunspell-cs`
+a `sql/tables/03_create_czech_fts.sql` z něj staví dvě konfigurace:
+
+| konfigurace | co dělá |
+| --- | --- |
+| `czech` | morfologie a stopslova; `vrtů` i `vrty` → `vrt`, předložka `pro` vypadne |
+| `czech_literal` | původní chování: odstranit diakritiku, indexovat doslovně |
+
+Chunky se indexují **oběma** najednou a dotaz se přes OR ptá obou. Samotná
+morfologie by totiž nenašla dotaz psaný bez diakritiky, a odháčkovat samotný
+slovník nejde — kolabuje to 12 000 z jeho 261 000 hesel. Takhle neztrácíš nic,
+co fungovalo dřív, jen přibývá skloňování.
 
 ## Stav
 

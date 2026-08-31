@@ -10,6 +10,9 @@ data/PDFs/*
 # Reproducible cache - regenerate instead of committing
 data/processed/
 
+# Local explanation notes
+/explanation.md
+
 # Local PostgreSQL data directory (bind mount)
 deploy/local/data/
 
