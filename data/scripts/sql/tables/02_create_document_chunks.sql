@@ -46,6 +46,11 @@ CREATE INDEX IF NOT EXISTS idx_chunks_document_id
 
 -- FTS is built from chunk_raw, not chunk_text: the context prefix repeats the
 -- same document metadata on every chunk and would pollute the keyword index.
+--
+-- This 'simple' version does no Czech morphology and is replaced by
+-- 03_create_czech_fts.sql. It stays here so that this file remains self
+-- contained, and so a database without the Czech dictionary files still indexes
+-- and searches the way it did before.
 CREATE OR REPLACE FUNCTION public.document_chunks_fts_trigger()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

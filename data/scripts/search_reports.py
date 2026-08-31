@@ -8,6 +8,16 @@ Two modes:
   like V-3, parcel numbers, standard references - and full-text is weak at
   paraphrase. RRF needs no score normalisation between the two.
 
+The full-text side asks both Czech configurations from
+sql/tables/03_create_czech_fts.sql: ``czech`` matches across inflection, and
+``czech_literal`` matches a query typed without diacritics. Chunks are indexed
+under both, so OR-ing the two queries finds whatever either one would.
+
+``websearch_to_tsquery`` rather than ``plainto_tsquery``: it understands quoted
+phrases, ``or`` and ``-word``, and unlike ``to_tsquery`` it never raises on
+whatever the user types. Terms are still ANDed by default, which only became
+workable once the dictionary made inflected forms meet and dropped stop words.
+
 Run from data/scripts:
     uv run python search_reports.py "hladina podzemni vody"
     uv run python search_reports.py "unosnost zakladove spary" --hybrid --limit 5
@@ -49,7 +59,10 @@ SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.page_from, c.page_
        ts_rank(c.fts_chunk, query) AS score
 FROM public.document_chunks c
 JOIN public.documents d ON d.id = c.document_id,
-     plainto_tsquery('simple', unaccent(%s::text)) AS query
+     LATERAL (
+         SELECT websearch_to_tsquery('public.czech', %s::text)
+                || websearch_to_tsquery('public.czech_literal', %s::text)
+     ) AS q(query)
 WHERE c.fts_chunk @@ query
   AND (%s::uuid IS NULL OR c.document_id = %s::uuid)
 ORDER BY score DESC
@@ -158,7 +171,9 @@ def main(argv: list[str] | None = None) -> int:
             render(vector_rows[: args.limit], "score")
             return 0
 
-        cursor.execute(_FTS_QUERY, (args.query, args.document, args.document, fetch))
+        cursor.execute(
+            _FTS_QUERY, (args.query, args.query, args.document, args.document, fetch)
+        )
         fts_rows = _rows_to_dicts(cursor)
         cursor.close()
 
