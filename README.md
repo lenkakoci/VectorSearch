@@ -112,6 +112,7 @@ uv run python extract_reports.py --markdown-only   # konverze bez LLM volání
 uv run python chunk_and_embed.py --dry-run         # ladění chunků bez placení
 uv run python ingest.py --dry-run                  # co by se stalo
 uv run python check_pipeline.py --no-db            # kontrola bez databáze
+uv run python search_reports.py "dotaz" --mode fts # hledání bez volání API
 ```
 
 `--only` bere ve všech skriptech stejné tvary — `Roudno`, `Roudno.pdf`
@@ -137,6 +138,77 @@ reálných posudků.
 indexem pro cosine similarity, `fts_chunk tsvector` s GIN indexem pro full-text.
 Citační jednotkou je `section` (cesta Markdown nadpisů), `page_from`/`page_to`
 jsou best-effort a mohou být `NULL`.
+
+## Vyhledávání
+
+Tři režimy. **`fts` nevolá žádné API** — nic nestojí, nepodléhá kvótě a funguje
+i bez Gemini klíče.
+
+```powershell
+uv run python search_reports.py "hladina podzemní vody"              # vektorový (výchozí)
+uv run python search_reports.py "ČSN 75 9010" --mode fts             # jen fulltext, zdarma
+uv run python search_reports.py "hladina podzemní vody" --mode hybrid # obojí, sloučené přes RRF
+```
+
+Skóre se liší podle režimu: `vector` ukazuje kosinovou podobnost (0–1),
+`fts` hodnotu `ts_rank`, `hybrid` skóre RRF (~0,016–0,033).
+
+### Filtrování podle metadat
+
+Filtr a sémantiku lze **odlišit v jednom dotazu**. Prefixy se vyzobou z textu,
+zbytek jde na vektory a fulltext:
+
+```powershell
+uv run python search_reports.py "autor:Poul obec:Lednice hladina vody" --mode hybrid
+```
+```
+Hybridni vyhledavani: 'hladina vody'
+  filtr: autor ~ 'Poul', obec ~ 'Lednice'
+```
+
+Totéž jde přepínači, což je vhodnější pro skriptování:
+
+```powershell
+uv run python search_reports.py "hladina vody" --autor Poul --obec Lednice --mode hybrid
+```
+
+| prefix | přepínač | filtruje |
+| --- | --- | --- |
+| `autor:` | `--autor` | autor posudku |
+| `klient:` | `--klient` | objednatel |
+| `lokalita:` | `--lokalita` | popis lokality |
+| `obec:` | `--obec` | obec |
+| `typ:` | `--typ` | typ průzkumu |
+| `org:` | `--org` | zpracovatelská organizace |
+| `od:` / `do:` | `--od` / `--do` | rozsah dat (`2019`, `2019-09`, `2019-09-11`) |
+| `doc:` | `--document` | konkrétní UUID, lze opakovat |
+
+Textové filtry hledají podřetězec, takže `autor:Poul` trefí i
+`Mgr. Josefína Bízová, RNDr. Mgr. Ivan Poul, Ph.D.`. Hodnotu s mezerou dej do
+uvozovek: `autor:"Ivan Poul"`. Neznámý prefix se nezahodí — zůstane součástí
+hledaného textu a vypíše se varování.
+
+### Přehled dokumentů
+
+`--list` vypíše dokumenty odpovídající filtru, bez hledání v obsahu a bez API:
+
+```powershell
+uv run python search_reports.py --list
+uv run python search_reports.py --list --obec Lednice
+uv run python search_reports.py --list --od 2019 --do 2020
+```
+
+### Co vyhledávání nedělá
+
+Vrací **pasáže, ne odpovědi** — úryvky seřazené podle relevance s citací sekce a
+strany. Odpověď si přečteš v nich.
+
+Neagreguje. Na otázky typu „kolik posudků je od UNIGEO" nebo „které zmiňují
+třídu těžitelnosti" je nástrojem SQL nad `documents`, ne vyhledávání. Dotaz
+uživatele se **záměrně nepřevádí na SQL modelem**: model si může vymyslet
+sloupec nebo vrátit věcně špatný výsledek bez chyby, a u geologických posudků je
+tichá chyba bezpečnostní problém — ze stejného důvodu má extrakce zakázáno
+cokoli odvozovat.
 
 ## Český fulltext
 

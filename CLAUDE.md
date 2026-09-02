@@ -89,6 +89,16 @@ and that single pass produces both the Markdown and `<stem>.pages.json`.
 the same extractor — they used not to, and only 63% of chunks resolved a page
 against 98% now. Do not reintroduce a second PDF library.
 
+**Search is three layers of one SQL query.** Metadata (`ILIKE`, `>=` over
+`documents`), full text (`fts_chunk @@ tsquery`) and meaning (`embedding <=>`)
+compose in a single statement — pgvector and tsvector are operators, not separate
+engines. `search_filters.py` turns `autor:Poul obec:Lednice hladina vody` into
+the metadata half and leaves the rest as the query. **Never let a model write
+SQL here**: it can invent a column or return a quietly wrong result, which in
+this corpus is a safety problem, the same reason extraction may not infer. If
+natural language is ever wanted, have the model fill a validated Pydantic filter
+object and compose the SQL from that.
+
 **Czech full-text needs a dictionary.** PostgreSQL ships no Czech stemmer, so
 `simple` made whole queries unanswerable — a section titled "vrtů pro tepelné
 čerpadlo" could not be found by searching "vrty pro tepelné čerpadlo". Chunks are

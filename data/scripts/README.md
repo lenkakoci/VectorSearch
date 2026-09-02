@@ -35,6 +35,7 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `manifest.py` | Pipeline state and stage-invalidation logic. |
 | `pipeline_common.py` | Settings, paths, connection parameters, logging. |
 | `chunker.py` | Section-aware Markdown chunker. No API, no database. |
+| `search_filters.py` | `field:value` prefixes and metadata flags into a parameterised WHERE. No API, no database. |
 | `markdown_normalizer.py` | Rebuilds headings and strips artefacts in extracted page text. `MARKDOWN_VERSION`. |
 | `extract_reports.py` | PDF → page text (pdfminer) → normalise → LLM structured extraction. |
 | `chunk_and_embed.py` | Chunking + embeddings → per-document parquet. |
@@ -56,6 +57,10 @@ uv run python chunk_and_embed.py --dry-run         # no embedding calls
 
 uv run python check_pipeline.py --no-db            # artefacts only
 uv run python check_pipeline.py --only Roudno      # one document
+
+uv run python search_reports.py "q" --mode fts     # full text only, no API call
+uv run python search_reports.py "autor:Poul q"     # inline metadata filter
+uv run python search_reports.py --list --obec Lednice
 ```
 
 `--only` takes the stem, the file name or a path in every script (`Roudno`,
@@ -110,6 +115,19 @@ uv run python -c "from chunker import chunk_markdown; import pathlib; cs = chunk
   queried with `websearch_to_tsquery` over both. The dictionary comes from
   `postgres/Dockerfile`; without it `03_create_czech_fts.sql` fails and the
   `simple` trigger from `02` stays, which is the previous working behaviour.
+- Search filters are SQL, not a fourth engine: both branches already are SQL, so
+  a restriction is more `WHERE`. `search_filters.py` composes that clause only
+  from its own fixed vocabulary and passes every value as a `%s` parameter, so
+  user text can never become syntax. Do not let a model write SQL here.
+- With a metadata filter the vector query joins `documents` before sorting, so
+  the top-N is taken *within* the filter rather than filtered afterwards. That
+  costs the HNSW index — the planner sorts after the join — which is irrelevant
+  at this corpus size and is the correct trade-off anyway: post-filtering a
+  global top-N can return nothing. At scale, turn on pgvector's
+  `hnsw.iterative_scan` rather than reordering the query.
+- One search is one embedding request and the quota is per request per minute,
+  so a burst of searches can hit 429. `embed_query()` retries like the ingestion
+  calls do; `--mode fts` avoids the call entirely.
 - `tiktoken` sizes chunks locally and is not Gemini's tokenizer, so counts are
   approximate. The 800-token target leaves ample margin under the 2048-token
   input limit of `gemini-embedding-001`.
