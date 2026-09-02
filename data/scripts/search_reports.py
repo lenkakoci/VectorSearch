@@ -1,12 +1,25 @@
 """Search the imported reports from the command line.
 
-Two modes:
+Three modes, chosen with ``--mode``:
 
-- vector (default): embed the query, rank by cosine distance over the HNSW index.
-- hybrid (--hybrid): also run a full-text query and merge both rankings with
-  Reciprocal Rank Fusion. Vector search is weak at exact tokens - borehole ids
-  like V-3, parcel numbers, standard references - and full-text is weak at
-  paraphrase. RRF needs no score normalisation between the two.
+- ``vector`` (default): embed the query, rank by cosine distance over the HNSW
+  index.
+- ``fts``: full text only. Makes **no API call at all**, so it costs nothing, is
+  not subject to the embedding quota, and works without a Gemini key.
+- ``hybrid``: run both and merge the rankings with Reciprocal Rank Fusion. Vector
+  search is weak at exact tokens - borehole ids like V-3, parcel numbers,
+  standard references - and full text is weak at paraphrase. RRF needs no score
+  normalisation between the two.
+
+Every mode can be restricted by metadata, either inline or as flags:
+
+    search_reports.py "autor:Poul obec:Lednice hladina vody" --mode hybrid
+    search_reports.py "hladina vody" --autor Poul --obec Lednice --mode hybrid
+    search_reports.py --list --od 2019
+
+Filtering is not a fourth kind of search: both branches are already SQL, so a
+restriction is just more ``WHERE``. See ``search_filters.py`` for the vocabulary
+and for why the clause is never built out of user text.
 
 The full-text side asks both Czech configurations from
 sql/tables/03_create_czech_fts.sql: ``czech`` matches across inflection, and
@@ -32,9 +45,17 @@ from typing import Any
 
 import psycopg2
 from google.genai import types
-from gemini_auth import create_gemini_client, normalize
+from gemini_auth import create_gemini_client, is_retryable_error, normalize
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from pipeline_common import configure_logging, load_connection_params, load_settings
+from search_filters import Filters, build_filters, parse_query
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +68,7 @@ SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.page_from, c.page_
        1 - (c.embedding <=> %s::vector) AS score
 FROM public.document_chunks c
 JOIN public.documents d ON d.id = c.document_id
-WHERE c.embedding IS NOT NULL
-  AND (%s::uuid IS NULL OR c.document_id = %s::uuid)
+WHERE c.embedding IS NOT NULL{filters}
 ORDER BY c.embedding <=> %s::vector
 LIMIT %s
 """
@@ -63,19 +83,40 @@ JOIN public.documents d ON d.id = c.document_id,
          SELECT websearch_to_tsquery('public.czech', %s::text)
                 || websearch_to_tsquery('public.czech_literal', %s::text)
      ) AS q(query)
-WHERE c.fts_chunk @@ query
-  AND (%s::uuid IS NULL OR c.document_id = %s::uuid)
+WHERE c.fts_chunk @@ query{filters}
 ORDER BY score DESC
 LIMIT %s
 """
 
+_LIST_QUERY = """
+SELECT d.id, d.title, d.author, d.report_date,
+       d.extraction_json->>'municipality' AS municipality,
+       count(c.chunk_id) AS chunks
+FROM public.documents d
+LEFT JOIN public.document_chunks c ON c.document_id = d.id
+WHERE TRUE{filters}
+GROUP BY d.id
+ORDER BY d.report_date DESC NULLS LAST, d.title
+"""
 
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=2, max=60),
+    retry=retry_if_exception(is_retryable_error),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 def embed_query(text: str, model: str, dimensions: int) -> list[float]:
     """Embed the query with the same model and dimensionality as the corpus.
 
     ``task_type=RETRIEVAL_QUERY`` is the counterpart to RETRIEVAL_DOCUMENT used
     when embedding chunks. Both sides of the pair must match, otherwise the query
     lands in a different region of the embedding space than the corpus.
+
+    Retried like the ingestion calls are: one search is one request, and the
+    embedding quota is counted per request per minute, so a handful of searches
+    in quick succession is enough to meet a 429.
     """
     client = create_gemini_client()
     response = client.models.embed_content(
@@ -117,7 +158,7 @@ def reciprocal_rank_fusion(
 def render(rows: list[dict[str, Any]], score_key: str) -> None:
     """Print search results."""
     if not rows:
-        print("No matches.")
+        print("Zadna shoda.")
         return
     for position, row in enumerate(rows, start=1):
         location = row.get("section") or "-"
@@ -133,14 +174,71 @@ def render(rows: list[dict[str, Any]], score_key: str) -> None:
     print()
 
 
+def render_documents(rows: list[dict[str, Any]]) -> None:
+    """Print the documents matching a filter."""
+    if not rows:
+        print("Zadny dokument neodpovida filtru.")
+        return
+    for row in rows:
+        print(f"\n{row['id']}  {row.get('title') or '(bez nazvu)'}")
+        print(
+            f"   obec: {row.get('municipality') or '-'}"
+            f" | autor: {row.get('author') or '-'}"
+            f" | datum: {row.get('report_date') or '-'}"
+            f" | {row['chunks']} chunku"
+        )
+    print()
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Search geological reports.")
-    parser.add_argument("query", help="Search query")
-    parser.add_argument("--hybrid", action="store_true", help="Combine vector and full-text search")
+    parser.add_argument("query", nargs="?", default="", help="Search query")
+    parser.add_argument(
+        "--mode",
+        choices=("vector", "fts", "hybrid"),
+        help="vector (default), fts (no API call), or hybrid",
+    )
+    parser.add_argument(
+        "--hybrid", action="store_true", help="Alias for --mode hybrid"
+    )
+    parser.add_argument(
+        "--list", action="store_true", dest="list_documents",
+        help="List the documents matching the filter instead of searching their text",
+    )
     parser.add_argument("--limit", type=int, default=5, help="Number of results (default: 5)")
-    parser.add_argument("--document", help="Restrict the search to one document UUID")
+
+    group = parser.add_argument_group("filters (also usable inline as autor:Poul)")
+    group.add_argument("--autor", "--author", dest="author")
+    group.add_argument("--klient", "--client", dest="client")
+    group.add_argument("--lokalita", "--locality", dest="locality")
+    group.add_argument("--obec", "--municipality", dest="municipality")
+    group.add_argument("--typ", "--type", dest="report_type")
+    group.add_argument("--org", dest="organization")
+    group.add_argument("--od", "--from", dest="date_from", help="YYYY, YYYY-MM or YYYY-MM-DD")
+    group.add_argument("--do", "--to", dest="date_to", help="YYYY, YYYY-MM or YYYY-MM-DD")
+    group.add_argument(
+        "--document", action="append", dest="document_ids",
+        help="Restrict to this document UUID. Repeatable.",
+    )
     return parser.parse_args(argv)
+
+
+def resolve_filters(args: argparse.Namespace) -> tuple[str, Filters]:
+    """Return the search text and the filters from both prefixes and flags."""
+    text, inline = parse_query(args.query)
+    flags = build_filters(
+        author=args.author,
+        client=args.client,
+        locality=args.locality,
+        municipality=args.municipality,
+        report_type=args.report_type,
+        organization=args.organization,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        document_ids=args.document_ids,
+    )
+    return text, inline.merge(flags)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -149,37 +247,75 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     settings = load_settings()
 
-    # Over-fetch each branch so fusion has something to work with.
-    fetch = args.limit * 4 if args.hybrid else args.limit
+    mode = args.mode or ("hybrid" if args.hybrid else "vector")
+    query, filters = resolve_filters(args)
+    filter_sql, filter_params = filters.where()
+    summary = filters.describe()
 
-    vector_literal = to_pgvector(
-        embed_query(args.query, settings.embedding_model, settings.embedding_dimensions)
-    )
+    if not args.list_documents and not query:
+        logger.error("Nothing to search for. Give a query, or use --list to list documents.")
+        return 1
 
     connection = psycopg2.connect(**load_connection_params())
     try:
         cursor = connection.cursor()
-        cursor.execute(
-            _VECTOR_QUERY,
-            (vector_literal, args.document, args.document, vector_literal, fetch),
-        )
-        vector_rows = _rows_to_dicts(cursor)
 
-        if not args.hybrid:
+        if args.list_documents:
+            if query:
+                logger.warning("--list ignores the query text %r", query)
+            cursor.execute(_LIST_QUERY.format(filters=filter_sql), filter_params)
+            rows = _rows_to_dicts(cursor)
             cursor.close()
-            print(f"\nVektorove vyhledavani: {args.query!r}")
-            render(vector_rows[: args.limit], "score")
+            print(f"\nDokumenty | filtr: {summary or '(zadny)'}")
+            render_documents(rows)
             return 0
 
-        cursor.execute(
-            _FTS_QUERY, (args.query, args.query, args.document, args.document, fetch)
-        )
-        fts_rows = _rows_to_dicts(cursor)
+        # Over-fetch each branch so fusion has something to work with.
+        fetch = args.limit * 4 if mode == "hybrid" else args.limit
+        header = {"vector": "Vektorove", "fts": "Fulltextove", "hybrid": "Hybridni"}[mode]
+        print(f"\n{header} vyhledavani: {query!r}")
+        if summary:
+            print(f"  filtr: {summary}")
+
+        vector_rows: list[dict[str, Any]] = []
+        if mode in ("vector", "hybrid"):
+            try:
+                literal = to_pgvector(
+                    embed_query(query, settings.embedding_model, settings.embedding_dimensions)
+                )
+            except Exception as exc:  # noqa: BLE001 - the fallback is worth naming
+                logger.error(
+                    "Could not embed the query (%s). Full text alone needs no API: "
+                    "re-run with --mode fts.",
+                    type(exc).__name__,
+                )
+                return 1
+            cursor.execute(
+                _VECTOR_QUERY.format(filters=filter_sql),
+                [literal, *filter_params, literal, fetch],
+            )
+            vector_rows = _rows_to_dicts(cursor)
+
+        fts_rows: list[dict[str, Any]] = []
+        if mode in ("fts", "hybrid"):
+            cursor.execute(
+                _FTS_QUERY.format(filters=filter_sql),
+                [query, query, *filter_params, fetch],
+            )
+            fts_rows = _rows_to_dicts(cursor)
+
         cursor.close()
 
-        print(f"\nHybridni vyhledavani: {args.query!r}")
-        print(f"  vektorove: {len(vector_rows)} kandidatu | full-text: {len(fts_rows)} kandidatu")
-        render(reciprocal_rank_fusion([vector_rows, fts_rows], args.limit), "rrf")
+        if mode == "vector":
+            render(vector_rows[: args.limit], "score")
+        elif mode == "fts":
+            render(fts_rows[: args.limit], "score")
+        else:
+            print(
+                f"  vektorove: {len(vector_rows)} kandidatu"
+                f" | full-text: {len(fts_rows)} kandidatu"
+            )
+            render(reciprocal_rank_fusion([vector_rows, fts_rows], args.limit), "rrf")
         return 0
     finally:
         connection.close()
