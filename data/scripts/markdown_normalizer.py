@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 3
+MARKDOWN_VERSION = 4
 
 # A pipe block is layout, not data, when most of its cells are empty. Real
 # tables in these reports (borehole profiles, laboratory results) are densely
@@ -53,7 +53,11 @@ _TABLE_FILL_THRESHOLD = 0.6
 # constant.
 _FURNITURE_PAGE_RATIO = 0.5
 _FURNITURE_MIN_REPEATS = 3
-_FURNITURE_MAX_LENGTH = 80
+# Long enough for a footer carrying a project name and its reference number.
+# One report repeats a 107-character one on every page, and at 80 it was never
+# even counted. Measured across the corpus, raising this to 160 catches that
+# footer and changes nothing else - the repeat threshold does the real work.
+_FURNITURE_MAX_LENGTH = 160
 _FURNITURE_MIN_SIGNATURE = 3
 
 # Guard rails for the no-table-of-contents fallback.
@@ -88,6 +92,7 @@ _TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(\S.*)$")
 _TOC_CAPTION_RE = re.compile(r"^obsah\b", re.IGNORECASE)
 _TRAILING_NUMBER_RE = re.compile(r"\s*\d{1,4}$")
+_BARE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)+\.?$")
 
 
 @dataclass
@@ -403,28 +408,63 @@ def _span_end(
     return end
 
 
+def _is_section_title(text: str) -> bool:
+    """Return whether ``text`` reads like a section name rather than a sentence.
+
+    Without this, "10.1 a 4.1 vyhlasky MZP c. 294/2005 Sb." would pass for one.
+    """
+    return (
+        3 <= len(text) <= _HEURISTIC_MAX_LENGTH
+        and text[-1] not in ".,;:"
+        and text[0].isupper()
+    )
+
+
 def _child_candidates(
     lines: list[str], parent_tuple: tuple[int, ...], start: int, end: int
-) -> list[tuple[int, tuple[int, ...], str]]:
-    """Return lines between ``start`` and ``end`` that look like direct subsections."""
-    found: list[tuple[int, tuple[int, ...], str]] = []
+) -> list[tuple[int, tuple[int, ...], str, int | None]]:
+    """Return lines between ``start`` and ``end`` that look like direct subsections.
+
+    Each entry is (line to turn into a heading, section number, that number as
+    written, line holding a stray number to blank). The last is set when the
+    extractor put the number on its own line above the title, which happens to
+    whole entries at a time - one report has "1.1." alone with "Identifikacni
+    udaje" two lines below, in its contents page as well as in its body.
+    """
+    found: list[tuple[int, tuple[int, ...], str, int | None]] = []
     for index in range(start + 1, end):
         stripped = lines[index].strip()
-        if not stripped or stripped.startswith("#") or len(stripped) > _HEURISTIC_MAX_LENGTH:
+        if not stripped or stripped.startswith("#"):
             continue
-        match = _NUMBERED_RE.match(stripped)
-        if not match:
+
+        orphan: int | None = None
+        if _BARE_NUMBER_RE.match(stripped):
+            title_index = _next_content_line(lines, index, end)
+            if title_index is None:
+                continue
+            raw, title, orphan = stripped.rstrip("."), lines[title_index].strip(), index
+            index = title_index
+        else:
+            match = _NUMBERED_RE.match(stripped)
+            if not match:
+                continue
+            raw, title = match.group(1), match.group(2).strip()
+
+        if not _is_section_title(title):
             continue
-        title = match.group(2).strip()
-        # A section name starts like a name and does not end like a sentence.
-        # Without this, "10.1 a 4.1 vyhlasky MZP c. 294/2005 Sb." reads as one.
-        if len(title) < 3 or title[-1] in ".,;:" or not title[0].isupper():
-            continue
-        number = _number_tuple(match.group(1))
+        number = _number_tuple(raw)
         if len(number) != len(parent_tuple) + 1 or number[:-1] != parent_tuple:
             continue
-        found.append((index, number, match.group(1)))
+        found.append((index, number, raw, orphan))
     return found
+
+
+def _next_content_line(lines: list[str], index: int, end: int) -> int | None:
+    """Return the next non-blank line within reach, or None."""
+    for probe in range(index + 1, min(index + _ORPHAN_SEARCH_LINES + 1, end)):
+        if lines[probe].strip():
+            return probe
+    return None
 
 
 def _apply_children(lines: list[str], placed: dict[str, int]) -> int:
@@ -466,14 +506,19 @@ def _apply_children(lines: list[str], placed: dict[str, int]) -> int:
             )
 
             end = _span_end(placed, numbers, parent, total=len(lines))
-            for index, number, raw in _child_candidates(lines, parent_tuple, placed[parent], end):
+            for index, number, raw, orphan in _child_candidates(
+                lines, parent_tuple, placed[parent], end
+            ):
                 before = max((value for at, value in siblings if at < index), default=0)
                 after = min((value for at, value in siblings if at > index), default=None)
                 if number[-1] <= before or (after is not None and number[-1] >= after):
                     continue
 
                 key = ".".join(str(part) for part in number)
-                lines[index] = _heading_prefix(raw, lines[index])
+                text = lines[index] if orphan is None else f"{raw}. {lines[index].strip()}"
+                lines[index] = _heading_prefix(raw, text)
+                if orphan is not None:
+                    lines[orphan] = ""
                 # Both maps are read again on the next parent in this same pass.
                 placed[key] = index
                 numbers[key] = number
