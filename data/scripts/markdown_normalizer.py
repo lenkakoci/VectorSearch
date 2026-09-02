@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 2
+MARKDOWN_VERSION = 3
 
 # A pipe block is layout, not data, when most of its cells are empty. Real
 # tables in these reports (borehole profiles, laboratory results) are densely
@@ -62,6 +62,10 @@ _HEURISTIC_MIN_HEADINGS = 3
 
 # How far below a heading to look for the section number pdfminer detached from it.
 _ORPHAN_SEARCH_LINES = 3
+
+# Deepest section number promoted to a heading, e.g. 2.2.1.3. Past this the
+# numbering in these reports is referring to something, not naming a section.
+_MAX_HEADING_DEPTH = 4
 
 # How close a body line must be to its table-of-contents entry. Not an exact
 # match, because pdfminer drops glyphs it cannot map: one report's body reads
@@ -329,7 +333,8 @@ def _apply_outline(lines: list[str], outline: dict[str, str]) -> tuple[list[str]
         placed[number] = index
         applied += 1
 
-    return result, applied + _apply_detached(result, outline, placed)
+    applied += _apply_detached(result, outline, placed)
+    return result, applied + _apply_children(result, placed)
 
 
 def _is_isolated(lines: list[str], index: int) -> bool:
@@ -374,6 +379,110 @@ def _apply_detached(lines: list[str], outline: dict[str, str], placed: dict[str,
             break
 
     return applied
+
+
+def _span_end(
+    placed: dict[str, int], numbers: dict[str, tuple[int, ...]], parent: str, total: int
+) -> int:
+    """Return the line where a heading's section stops.
+
+    That is the first later heading which is not one of its descendants.
+    """
+    parent_tuple = numbers[parent]
+    end = total
+    for other, index in placed.items():
+        if index <= placed[parent]:
+            continue
+        other_tuple = numbers[other]
+        descendant = (
+            len(other_tuple) > len(parent_tuple)
+            and other_tuple[: len(parent_tuple)] == parent_tuple
+        )
+        if not descendant:
+            end = min(end, index)
+    return end
+
+
+def _child_candidates(
+    lines: list[str], parent_tuple: tuple[int, ...], start: int, end: int
+) -> list[tuple[int, tuple[int, ...], str]]:
+    """Return lines between ``start`` and ``end`` that look like direct subsections."""
+    found: list[tuple[int, tuple[int, ...], str]] = []
+    for index in range(start + 1, end):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith("#") or len(stripped) > _HEURISTIC_MAX_LENGTH:
+            continue
+        match = _NUMBERED_RE.match(stripped)
+        if not match:
+            continue
+        title = match.group(2).strip()
+        # A section name starts like a name and does not end like a sentence.
+        # Without this, "10.1 a 4.1 vyhlasky MZP c. 294/2005 Sb." reads as one.
+        if len(title) < 3 or title[-1] in ".,;:" or not title[0].isupper():
+            continue
+        number = _number_tuple(match.group(1))
+        if len(number) != len(parent_tuple) + 1 or number[:-1] != parent_tuple:
+            continue
+        found.append((index, number, match.group(1)))
+    return found
+
+
+def _apply_children(lines: list[str], placed: dict[str, int]) -> int:
+    """Promote subsections a shallow contents page never listed.
+
+    Some reports print only their top-level chapters in the contents while the
+    body is numbered two or three levels deep; one real report listed six
+    chapters and hid twenty-eight subsections below them. The contents cannot
+    authorise those, so they are recognised by position instead: a line counts as
+    a heading only if its parent is already a heading, it sits inside that
+    parent's span, and it continues the run of siblings. All three together are
+    what separates "2.2.1 Kopane sondy" from "1.4 m zavaleno" - the measurement
+    fails the span test, being nowhere near section 1.
+
+    Runs until nothing more is found, so a promoted subsection can in turn carry
+    its own children.
+    """
+    total = 0
+    while True:
+        added = 0
+        numbers = {number: _number_tuple(number) for number in placed}
+        for parent in sorted(placed, key=lambda number: placed[number]):
+            parent_tuple = numbers[parent]
+            if len(parent_tuple) >= _MAX_HEADING_DEPTH:
+                continue
+
+            # A candidate has to fit between the siblings already sitting either
+            # side of it, which is a stricter test than merely rising and a much
+            # weaker one than an unbroken run. Reports skip numbers, and the gap
+            # is as often in the middle as at the end: one contents page listed
+            # 5.1, 5.2, 5.3, 5.6, 5.7 and left 5.4 and 5.5 to be found here.
+            # Together with having to sit inside the parent, this is what keeps
+            # stray numbers such as "1.4 m zavaleno" out.
+            siblings = sorted(
+                (placed[number], numbers[number][-1])
+                for number in placed
+                if len(numbers[number]) == len(parent_tuple) + 1
+                and numbers[number][:-1] == parent_tuple
+            )
+
+            end = _span_end(placed, numbers, parent, total=len(lines))
+            for index, number, raw in _child_candidates(lines, parent_tuple, placed[parent], end):
+                before = max((value for at, value in siblings if at < index), default=0)
+                after = min((value for at, value in siblings if at > index), default=None)
+                if number[-1] <= before or (after is not None and number[-1] >= after):
+                    continue
+
+                key = ".".join(str(part) for part in number)
+                lines[index] = _heading_prefix(raw, lines[index])
+                # Both maps are read again on the next parent in this same pass.
+                placed[key] = index
+                numbers[key] = number
+                siblings = sorted([*siblings, (index, number[-1])])
+                added += 1
+
+        total += added
+        if not added:
+            return total
 
 
 def _drop_orphan_number(lines: list[str], index: int, number: str) -> None:
