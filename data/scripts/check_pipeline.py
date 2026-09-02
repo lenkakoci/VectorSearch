@@ -46,7 +46,7 @@ from schemas import SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
-OK, WARN, FAIL = "OK", "VAROVÁNÍ", "CHYBA"
+OK, WARN, FAIL, TODO = "OK", "VAROVÁNÍ", "CHYBA", "ČEKÁ"
 
 # Below this share of chunks carrying a page number, page attribution is worth a
 # look. Two real reports sit at 98% and 86%; well under that means the Markdown
@@ -79,7 +79,7 @@ def _check(label: str, ok: bool, detail: str, *, warn_only: bool = False) -> Che
     return Check(label, WARN if warn_only else FAIL, detail)
 
 
-def check_markdown(stem: str, is_pdf: bool) -> list[Check]:
+def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> list[Check]:
     """Verify the Markdown stage: headings present, artefacts gone."""
     path = MARKDOWN_DIR / f"{stem}.md"
     if not path.exists():
@@ -112,11 +112,15 @@ def check_markdown(stem: str, is_pdf: bool) -> list[Check]:
     if tables:
         leftovers.append(f"{tables}x řádek tabulky")
 
+    # A repeated short line is usually a running header the normaliser did not
+    # reach, but it can equally be a value repeating down a laboratory table, so
+    # the page count goes in the message and a human decides which it is.
     counts = Counter(sig for sig in (_signature(line) for line in lines) if sig)
     repeats = [(sig, n) for sig, n in counts.items() if n >= 5]
     if repeats:
-        worst = max(repeats, key=lambda item: item[1])
-        leftovers.append(f"řádek opakovaný {worst[1]}x ({worst[0][:34]!r})")
+        signature, count = max(repeats, key=lambda item: item[1])
+        share = f" na {count}/{page_count} stran" if page_count else ""
+        leftovers.append(f"řádek opakovaný {count}x{share} ({signature[:34]!r})")
 
     checks.append(
         _check(
@@ -146,10 +150,17 @@ def check_markdown(stem: str, is_pdf: bool) -> list[Check]:
     return checks
 
 
-def check_extraction(stem: str) -> tuple[list[Check], dict[str, Any] | None]:
-    """Verify the extraction stage."""
+def check_extraction(stem: str, ran: bool) -> tuple[list[Check], dict[str, Any] | None]:
+    """Verify the extraction stage.
+
+    ``ran`` says whether the manifest claims this stage completed. A missing file
+    for a stage that never ran is the normal state after --markdown-only, not a
+    failure; only a stage the manifest calls done may be missing its output.
+    """
     path = stage_outputs(f"{stem}.pdf")["extract"]
     if not path.exists():
+        if not ran:
+            return [Check("extrakce", TODO, "zatím neproběhla")], None
         return [Check("extrakce", FAIL, f"chybí {path.name}")], None
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -171,10 +182,14 @@ def check_extraction(stem: str) -> tuple[list[Check], dict[str, Any] | None]:
     return checks, payload
 
 
-def check_chunks(stem: str, settings: Settings, is_pdf: bool) -> tuple[list[Check], pd.DataFrame | None]:
+def check_chunks(
+    stem: str, settings: Settings, is_pdf: bool, ran: bool
+) -> tuple[list[Check], pd.DataFrame | None]:
     """Verify the chunking and embedding stage."""
     path = stage_outputs(f"{stem}.pdf")["chunk"]
     if not path.exists():
+        if not ran:
+            return [Check("chunky", TODO, "zatím neproběhly")], None
         return [Check("chunky", FAIL, f"chybí {path.name}")], None
 
     frame = pd.read_parquet(path)
@@ -235,7 +250,20 @@ def check_chunks(stem: str, settings: Settings, is_pdf: bool) -> tuple[list[Chec
 
 
 def check_manifest(entry: dict[str, Any], settings: Settings) -> list[Check]:
-    """Verify the manifest records current versions for every stage."""
+    """Verify the manifest records current versions for every stage.
+
+    A document that has only been converted so far is reported as waiting rather
+    than stale: comparing its absent extraction model against the configured one
+    would just be noise during the convert-and-inspect step.
+    """
+    pending = [
+        stage
+        for stage in ("markdown", "extract", "chunk", "import")
+        if not entry.get(timestamp_key(stage))
+    ]
+    if pending:
+        return [Check("manifest", TODO, "zbývá: " + ", ".join(pending))]
+
     stale = []
     if entry.get("markdown_version") != MARKDOWN_VERSION:
         stale.append(f"markdown v{entry.get('markdown_version')} != v{MARKDOWN_VERSION}")
@@ -247,11 +275,6 @@ def check_manifest(entry: dict[str, Any], settings: Settings) -> list[Check]:
         stale.append(f"dimenze {entry.get('embedding_dimensions')}")
     if entry.get("chunk_params_hash") != settings.pipeline_config().chunk_params:
         stale.append("parametry chunkování")
-
-    missing_stages = [stage for stage in ("markdown", "extract", "chunk", "import")
-                      if not entry.get(timestamp_key(stage))]
-    if missing_stages:
-        stale.append("neproběhlo: " + ", ".join(missing_stages))
 
     return [
         _check(
@@ -266,7 +289,7 @@ def check_manifest(entry: dict[str, Any], settings: Settings) -> list[Check]:
 def check_database(cursor, stem: str, payload: dict[str, Any] | None, frame: pd.DataFrame | None) -> list[Check]:
     """Verify the document landed in the database and is searchable."""
     if payload is None:
-        return [Check("databáze", WARN, "přeskočeno, chybí extrakce")]
+        return [Check("databáze", TODO, "čeká na dřívější fáze")]
 
     document_id = payload["document_id"]
     cursor.execute("SELECT title FROM public.documents WHERE id = %s", (document_id,))
@@ -319,16 +342,17 @@ def check_database(cursor, stem: str, payload: dict[str, Any] | None, frame: pd.
     return checks
 
 
-def render(stem: str, key: str, checks: list[Check]) -> tuple[int, int]:
-    """Print one document's checks. Returns (failures, warnings)."""
+def render(stem: str, key: str, checks: list[Check]) -> tuple[int, int, int]:
+    """Print one document's checks. Returns (failures, warnings, pending)."""
     failures = sum(1 for check in checks if check.status == FAIL)
     warnings = sum(1 for check in checks if check.status == WARN)
-    marker = "FAIL" if failures else ("WARN" if warnings else "OK")
+    pending = sum(1 for check in checks if check.status == TODO)
+    marker = "FAIL" if failures else ("WARN" if warnings else ("ČEKÁ" if pending else "OK"))
 
     print(f"\n=== {stem}  ({key})  [{marker}]")
     for check in checks:
         print(f"  {check.status:9} {check.label:18} {check.detail}")
-    return failures, warnings
+    return failures, warnings, pending
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -365,30 +389,37 @@ def main(argv: list[str] | None = None) -> int:
 
     total_failures = 0
     total_warnings = 0
+    total_pending = 0
     try:
         for key in keys:
             stem = Path(key).stem
             is_pdf = key.lower().endswith(".pdf")
             entry = manifest.get(key)
 
-            checks = check_markdown(stem, is_pdf)
-            extraction_checks, payload = check_extraction(stem)
+            checks = check_markdown(stem, is_pdf, entry.get("page_count"))
+            extraction_checks, payload = check_extraction(
+                stem, bool(entry.get(timestamp_key("extract")))
+            )
             checks += extraction_checks
-            chunk_checks, frame = check_chunks(stem, settings, is_pdf)
+            chunk_checks, frame = check_chunks(
+                stem, settings, is_pdf, bool(entry.get(timestamp_key("chunk")))
+            )
             checks += chunk_checks
             if cursor is not None:
                 checks += check_database(cursor, stem, payload, frame)
             checks += check_manifest(entry, settings)
 
-            failures, warnings = render(stem, key, checks)
+            failures, warnings, pending = render(stem, key, checks)
             total_failures += failures
             total_warnings += warnings
+            total_pending += pending
     finally:
         if connection is not None:
             connection.close()
 
     print(
-        f"\nSOUHRN: {len(keys)} dokumentů | {total_failures} chyb, {total_warnings} varování"
+        f"\nSOUHRN: {len(keys)} dokumentů | {total_failures} chyb,"
+        f" {total_warnings} varování, {total_pending} čeká na zpracování"
     )
     return 1 if total_failures else 0
 
