@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 4
+MARKDOWN_VERSION = 5
 
 # A pipe block is layout, not data, when most of its cells are empty. Real
 # tables in these reports (borehole profiles, laboratory results) are densely
@@ -93,6 +93,12 @@ _NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(\S.*)$")
 _TOC_CAPTION_RE = re.compile(r"^obsah\b", re.IGNORECASE)
 _TRAILING_NUMBER_RE = re.compile(r"\s*\d{1,4}$")
 _BARE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)+\.?$")
+
+# Lines allowed between two contents entries before they count as separate
+# blocks. Entries are not adjacent - one report's sit 18 lines apart, with page
+# structure between them - but the blocks this separates are tens of thousands
+# of lines apart, so the threshold has a lot of room either side.
+_TOC_MAX_GAP = 40
 
 
 @dataclass
@@ -227,21 +233,36 @@ def _extract_toc(lines: list[str]) -> tuple[list[str], dict[str, str], int]:
     if len(matches) < _HEURISTIC_MIN_HEADINGS:
         return lines, {}, 0
 
-    start, end = matches[0], matches[-1]
+    # A contents page is a dense run of entries, so entries far apart belong to
+    # different blocks. Taking first-to-last as one span deleted 91% of two
+    # borehole reports, which have a contents page at the front and another list
+    # at the back; only the safety net kept them from being gutted.
+    blocks: list[list[int]] = [[matches[0]]]
+    for index in matches[1:]:
+        if index - blocks[-1][-1] <= _TOC_MAX_GAP:
+            blocks[-1].append(index)
+        else:
+            blocks.append([index])
     outline: dict[str, str] = {}
-    for index in matches:
-        match = _TOC_ENTRY_RE.match(lines[index].strip())
-        if match is not None:
-            outline.setdefault(match.group(1), match.group(2))
+    for block in blocks:
+        for index in block:
+            match = _TOC_ENTRY_RE.match(lines[index].strip())
+            if match is not None:
+                outline.setdefault(match.group(1), match.group(2))
 
-    # Swallow the "Obsah" caption sitting immediately above the first entry.
-    while start > 0 and not lines[start - 1].strip():
-        start -= 1
-    if start > 0 and _TOC_CAPTION_RE.match(lines[start - 1].strip()):
-        start -= 1
+    dropped = 0
+    remaining = lines
+    for block in reversed(blocks):
+        start, end = block[0], block[-1]
+        # Swallow the "Obsah" caption sitting immediately above the first entry.
+        while start > 0 and not remaining[start - 1].strip():
+            start -= 1
+        if start > 0 and _TOC_CAPTION_RE.match(remaining[start - 1].strip()):
+            start -= 1
+        dropped += end + 1 - start
+        remaining = remaining[:start] + remaining[end + 1 :]
 
-    remaining = lines[:start] + lines[end + 1 :]
-    return remaining, outline, end + 1 - start
+    return remaining, outline, dropped
 
 
 def _number_tuple(number: str) -> tuple[int, ...]:
