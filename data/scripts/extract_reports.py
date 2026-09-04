@@ -91,6 +91,16 @@ def build_client() -> tuple[genai.Client, str]:
     return create_gemini_client(), model
 
 
+class ConversionError(RuntimeError):
+    """A source file yielded no usable text.
+
+    Its own class so the runner can count it as a failure and print the reason
+    plainly. It used to return False, which counted as neither processed nor
+    failed, so three scans without a text layer produced "0 failed" and vanished
+    from the summary.
+    """
+
+
 def pdf_pages(path: Path) -> list[str]:
     """Return the text of a PDF, one string per page.
 
@@ -195,8 +205,12 @@ def process_one(
         pages = pdf_pages(path)
         markdown, stats = to_markdown(path, pages)
         if not markdown.strip():
-            logger.error("Empty Markdown extracted from %s; skipping", path.name)
-            return False
+            if pages and not any(page.strip() for page in pages):
+                raise ConversionError(
+                    f"{path.name}: chybí OCR vrstva - {len(pages)} stran neobsahuje žádný text. "
+                    "Nechat PDF projít OCR a nahrát znovu."
+                )
+            raise ConversionError(f"{path.name}: převod nevrátil žádný text")
         if stats is not None:
             logger.info(
                 "  %d headings (%s) | unwrapped %d table rows | dropped %d furniture, %d contents lines",
@@ -349,6 +363,10 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
             ):
                 processed += 1
+        except ConversionError as exc:
+            # Expected and explained, so no traceback - but still a failure.
+            failed += 1
+            logger.error("%s", exc)
         except Exception as exc:  # noqa: BLE001 - one bad report must not stop the batch
             failed += 1
             logger.exception("Failed processing %s: %s", path.name, exc)
