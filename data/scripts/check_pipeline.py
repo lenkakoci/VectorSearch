@@ -59,8 +59,21 @@ _MIN_SENSIBLE_TOKENS = 60
 # gemini-embedding-001 accepts about 2048 tokens and tiktoken undercounts Czech.
 _MAX_SENSIBLE_TOKENS = 1500
 
-_DOT_LEADER_RE = re.compile(r"\.{4,}")
+# A blank page or two is a separator; this share of them means scanned annexes.
+_EMPTY_PAGE_WARN = 0.10
+
+_TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
+_WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
+
+def _looks_like_furniture(signature: str) -> bool:
+    """Return whether a repeated line reads like a header rather than a number.
+
+    Laboratory tables repeat fragments like "19," or "<0," down every page and
+    those are data, not pagination. A running header has words in it.
+    """
+    return len(_WORD_RE.findall(signature)) >= 2
 
 
 @dataclass
@@ -105,9 +118,12 @@ def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> li
     # Artefacts the normaliser is supposed to have removed. Present means it did
     # not recognise them, which usually also means the headings are wrong.
     leftovers = []
-    dot_leaders = sum(1 for line in lines if _DOT_LEADER_RE.search(line))
+    # Only contents-shaped leftovers, i.e. numbered. Dot leaders are also used
+    # for table footnotes ("*) ..... odvozena hodnota"), which belong in the text
+    # and would otherwise put every report with a results table on this list.
+    dot_leaders = sum(1 for line in lines if _TOC_ENTRY_RE.match(line.strip()))
     if dot_leaders:
-        leftovers.append(f"{dot_leaders}x zbytek obsahu (tečkové vodítko)")
+        leftovers.append(f"{dot_leaders}x nezpracovaná položka obsahu")
     tables = sum(1 for line in lines if line.strip().startswith("|"))
     if tables:
         leftovers.append(f"{tables}x řádek tabulky")
@@ -116,11 +132,13 @@ def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> li
     # reach, but it can equally be a value repeating down a laboratory table, so
     # the page count goes in the message and a human decides which it is.
     counts = Counter(sig for sig in (_signature(line) for line in lines) if sig)
-    repeats = [(sig, n) for sig, n in counts.items() if n >= 5]
+    repeats = [
+        (sig, n) for sig, n in counts.items() if n >= 5 and _looks_like_furniture(sig)
+    ]
     if repeats:
         signature, count = max(repeats, key=lambda item: item[1])
-        share = f" na {count}/{page_count} stran" if page_count else ""
-        leftovers.append(f"řádek opakovaný {count}x{share} ({signature[:34]!r})")
+        pages = f", dokument má {page_count} stran" if page_count else ""
+        leftovers.append(f"řádek opakovaný {count}x{pages} ({signature[:36]!r})")
 
     checks.append(
         _check(
@@ -136,10 +154,13 @@ def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> li
         if pages_path.exists():
             pages = json.loads(pages_path.read_text(encoding="utf-8"))
             empty = sum(1 for page in pages if not page.strip())
+            # A blank separator page or two is normal; a fifth of the document
+            # being blank means scanned annexes nobody can search.
+            noteworthy = pages and empty / len(pages) >= _EMPTY_PAGE_WARN
             checks.append(
                 _check(
                     "mapa stránek",
-                    empty == 0,
+                    not noteworthy,
                     f"{len(pages)} stran" + (f", z toho {empty} prázdných" if empty else ""),
                     warn_only=True,
                 )
@@ -342,6 +363,102 @@ def check_database(cursor, stem: str, payload: dict[str, Any] | None, frame: pd.
     return checks
 
 
+def check_unconverted(settings: Settings, wanted: set[str] | None) -> list[Check]:
+    """Report source PDFs that produced no Markdown at all.
+
+    These never reach the manifest, so every other check in this file is blind to
+    them - the documents that failed hardest were the ones the report did not
+    mention. A PDF whose pages hold no characters has no text layer: it is a scan
+    and needs OCR before this pipeline can do anything with it.
+    """
+    from extract_reports import pdf_pages  # heavy import, only needed here
+
+    checks: list[Check] = []
+    for path in sorted(settings.input_dir.glob("*.pdf")):
+        if wanted is not None and path.stem not in wanted:
+            continue
+        if (MARKDOWN_DIR / f"{path.stem}.md").exists():
+            continue
+        try:
+            pages = pdf_pages(path)
+        except Exception as exc:  # noqa: BLE001 - report it rather than crash the run
+            checks.append(Check(path.stem, FAIL, f"nelze přečíst: {type(exc).__name__}"))
+            continue
+        if pages and not any(page.strip() for page in pages):
+            checks.append(
+                Check(path.stem, FAIL, f"chybí OCR vrstva — {len(pages)} stran bez textu")
+            )
+        else:
+            checks.append(Check(path.stem, FAIL, "převod nevrátil žádný text"))
+    return checks
+
+
+def verdict_of(checks: list[Check]) -> str:
+    """Return the worst status among ``checks``."""
+    for status in (FAIL, WARN, TODO):
+        if any(check.status == status for check in checks):
+            return status
+    return OK
+
+
+def render_triage(
+    results: list[tuple[str, list[Check]]], unconverted: list[Check]
+) -> None:
+    """Print only what needs a decision, grouped by what to do about it."""
+    ocr = [c for c in unconverted if "OCR" in c.detail]
+    broken = [c for c in unconverted if "OCR" not in c.detail]
+    no_sections = [
+        (stem, c) for stem, checks in results for c in checks
+        if c.label == "markdown" and c.status == FAIL
+    ]
+    failed = [
+        (stem, c) for stem, checks in results for c in checks
+        if c.status == FAIL and c.label != "markdown"
+    ]
+    attention = [(stem, c) for stem, checks in results for c in checks if c.status == WARN]
+    fine = [stem for stem, checks in results if verdict_of(checks) in (OK, TODO)]
+
+    def block(title: str, rows: list[tuple[str, str]], action: str) -> None:
+        if not rows:
+            return
+        print(f"\n{title} ({len(rows)})")
+        for name, detail in rows:
+            print(f"   {name[:52]:54} {detail}")
+        print(f"   -> {action}")
+
+    print("\n" + "=" * 72)
+    print("TRIAGE")
+    print("=" * 72)
+
+    block(
+        "CHYBÍ OCR VRSTVA",
+        [(c.label, c.detail.split("—")[-1].strip()) for c in ocr],
+        "nechat projít OCR a nahrát znovu; jinak z nich pipeline nic nedostane",
+    )
+    block(
+        "PŘEVOD SELHAL",
+        [(c.label, c.detail) for c in broken],
+        "podívat se na PDF ručně",
+    )
+    block(
+        "BEZ NADPISŮ",
+        [(stem, c.detail) for stem, c in no_sections],
+        "chunky nedostanou citaci sekce; prohlédnout .md a případně nahlásit vzorec",
+    )
+    block("CHYBY", [(stem, f"{c.label}: {c.detail}") for stem, c in failed], "opravit před ingestem")
+    block(
+        "STOJÍ ZA POHLED",
+        [(stem, f"{c.label}: {c.detail}") for stem, c in attention],
+        "obvykle obsah tabulek nebo skenované přílohy; posoudit očima",
+    )
+
+    print(f"\nV POŘÁDKU ({len(fine)})")
+    for stem in fine[:6]:
+        print(f"   {stem[:66]}")
+    if len(fine) > 6:
+        print(f"   … a dalších {len(fine) - 6}")
+
+
 def render(stem: str, key: str, checks: list[Check]) -> tuple[int, int, int]:
     """Print one document's checks. Returns (failures, warnings, pending)."""
     failures = sum(1 for check in checks if check.status == FAIL)
@@ -362,6 +479,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--only", nargs="*", help="Restrict to these documents (stem, file name or path)"
     )
     parser.add_argument("--no-db", action="store_true", help="Skip the database checks")
+    parser.add_argument(
+        "--triage", action="store_true",
+        help="Print only what needs a decision, grouped by what to do about it",
+    )
     return parser.parse_args(argv)
 
 
@@ -374,7 +495,8 @@ def main(argv: list[str] | None = None) -> int:
 
     wanted = {Path(item).stem for item in args.only} if args.only else None
     keys = [key for key in manifest.keys() if wanted is None or Path(key).stem in wanted]
-    if not keys:
+    unconverted = check_unconverted(settings, wanted)
+    if not keys and not unconverted:
         logger.warning("Nothing to check; the manifest is empty or --only matched nothing")
         return 0
 
@@ -387,9 +509,10 @@ def main(argv: list[str] | None = None) -> int:
         except psycopg2.Error as exc:
             logger.warning("Database unreachable, skipping those checks: %s", str(exc).strip())
 
-    total_failures = 0
+    total_failures = len(unconverted)
     total_warnings = 0
     total_pending = 0
+    results: list[tuple[str, list[Check]]] = []
     try:
         for key in keys:
             stem = Path(key).stem
@@ -409,7 +532,13 @@ def main(argv: list[str] | None = None) -> int:
                 checks += check_database(cursor, stem, payload, frame)
             checks += check_manifest(entry, settings)
 
-            failures, warnings, pending = render(stem, key, checks)
+            results.append((stem, checks))
+            if args.triage:
+                failures = sum(1 for c in checks if c.status == FAIL)
+                warnings = sum(1 for c in checks if c.status == WARN)
+                pending = sum(1 for c in checks if c.status == TODO)
+            else:
+                failures, warnings, pending = render(stem, key, checks)
             total_failures += failures
             total_warnings += warnings
             total_pending += pending
@@ -417,8 +546,15 @@ def main(argv: list[str] | None = None) -> int:
         if connection is not None:
             connection.close()
 
+    if args.triage:
+        render_triage(results, unconverted)
+    elif unconverted:
+        print("\n=== zdroje bez převodu (nejsou v manifestu)")
+        for check in unconverted:
+            print(f"  {check.status:9} {check.label[:44]:46} {check.detail}")
+
     print(
-        f"\nSOUHRN: {len(keys)} dokumentů | {total_failures} chyb,"
+        f"\nSOUHRN: {len(keys) + len(unconverted)} zdrojů | {total_failures} chyb,"
         f" {total_warnings} varování, {total_pending} čeká na zpracování"
     )
     return 1 if total_failures else 0
