@@ -57,6 +57,10 @@ _STOPWORD_SHARE = 0.06
 # divider. A run has to be at least this long to stand.
 _MIN_RUN_PAGES = 2
 
+# How many opening pages can be the cover. Two is what these reports use - a
+# title page and an identification page - and three leaves room.
+_MAX_COVER_PAGES = 3
+
 # Two letters minimum. Czech's single-letter prepositions (a, i, v, k, s, z, o,
 # u) are exactly the characters that rotated scanned tables decompose into -
 # "« | a | k | m | E | á | c | n | z | o" - so counting them would raise the
@@ -144,9 +148,26 @@ def _smooth(kinds: list[str]) -> list[str]:
     return smoothed
 
 
+def _keep_cover(kinds: list[str]) -> list[str]:
+    """Reclaim a leading run of form pages as the report's cover.
+
+    A cover page is short lines and no verbs, so it measures as a form - and it
+    carries the report's own name. Four of the fifteen reports lost theirs to the
+    annex, taking "ROUDNO – REKREAČNÍ AREÁL" and "ZÁBŘEH N. M. - VSAKOVACÍ
+    ZKOUŠKY" with it, which left the cover furniture below as the only candidate
+    for the document title. An annex follows the report; it never opens it.
+    """
+    kept = list(kinds)
+    for index in range(min(_MAX_COVER_PAGES, len(kept))):
+        if kept[index] != FORM:
+            break
+        kept[index] = PROSE
+    return kept
+
+
 def classify_pages(pages: list[str]) -> list[str]:
     """Classify every page as ``prose``, ``form`` or ``empty``.
 
     The result is positional: element *i* describes ``pages[i]``.
     """
-    return _smooth([_classify_one(page) for page in pages])
+    return _keep_cover(_smooth([_classify_one(page) for page in pages]))

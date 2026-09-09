@@ -101,6 +101,28 @@ _TOC_CAPTION_RE = re.compile(r"^obsah\b", re.IGNORECASE)
 _TRAILING_NUMBER_RE = re.compile(r"\s*\d{1,4}$")
 _BARE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)+\.?$")
 
+# What a cover page says about itself. Every one of these produced a real title
+# in the corpus: "NOVÁKOVÝCH 6, PRAHA 8, 180 00", "Ing. Roman Králík",
+# "DIAMO, státní podnik", "Objednatel:", "Rozdělovník:". The heading path of
+# every chunk in those documents began with it.
+_TITLE_REJECT_RE = re.compile(
+    r"^(?:ing|mgr|rndr|bc|doc|prof|judr|phdr|mudr)\.\s"
+    r"|^(?:tel|fax|e-?mail|www|i[cč]|di[cč])\b"
+    r"|^\d+\s*[.:)]"
+    r"|^(?:seznam\s+p[rř][ií]loh|rozd[eě]lovn[ií]k|obsah)\b"
+    r"|\b\d{3}\s?\d{2}\b"
+    r"|\b(?:s\.\s?r\.\s?o|a\.\s?s|spol\.\s?s|v\.\s?o\.\s?s)\.|st[aá]tn[ií] podnik",
+    re.IGNORECASE,
+)
+
+# A report names what it is, and the cover furniture around it does not. Domain
+# specific on purpose: it is what separates "Geologický průzkum pro zasakování
+# srážkových vod" from the address block above it on the same page.
+_TITLE_KEYWORD_RE = re.compile(
+    r"pr[uů]zkum|zpr[aá]v|posudek|posouzen|vyhodnocen|monitoring|sanac|dokumentace|studie",
+    re.IGNORECASE,
+)
+
 # Lines allowed between two contents entries before they count as separate
 # blocks. Entries are not adjacent - one report's sit 18 lines apart, with page
 # structure between them - but the blocks this separates are tens of thousands
@@ -585,28 +607,59 @@ def _promote_title(lines: list[str]) -> tuple[list[str], bool]:
     """Turn the report's opening line into the top-level heading.
 
     Gives the cover page and anything else ahead of the first numbered section a
-    citation instead of no section at all. The first line is not always usable:
-    the running header is by then already gone as page furniture, and pdfminer
-    can leave a stray glyph in its place, so the first line with real words wins
-    and is hoisted to the top - anything above it would otherwise keep forming a
-    leading section with no name.
+    citation instead of no section at all, and is hoisted to the top - anything
+    above it would otherwise keep forming a leading section with no name.
+
+    Taking the first usable line produced "NOVÁKOVÝCH 6, PRAHA 8, 180 00",
+    "Ing. Roman Králík", "DIAMO, státní podnik" and "Rozdělovník:", each of them
+    the root of every section path in its document. A cover page is mostly the
+    surveyor saying who they are, so lines that name a person, a company, an
+    address, a contact or a list entry are skipped, and among what is left the
+    one naming the kind of report wins.
+
+    Preferring the keyword over the first survivor is deliberate. Reversing it
+    gives a better title where the cover is clean - "ROUDNO – REKREAČNÍ AREÁL"
+    rather than "HG POSUDEK" - but where the letterhead survives it gives
+    "Bičík - GEO" and "PRAHA 11 - CHODOV". Generic and right beats specific and
+    wrong for a citation prefix, and the title users actually see comes from the
+    extraction stage, not from here.
+
+    When nothing names a report, nothing is promoted: one document's cover page
+    does not survive normalisation, and no title is better than a wrong one.
     """
     result = list(lines)
+    candidates: list[tuple[int, str]] = []
     seen = 0
     for index, line in enumerate(result):
         stripped = line.strip()
         if not stripped:
             continue
         if stripped.startswith("#"):
-            return result, False
+            break
         seen += 1
         if seen > _TITLE_SEARCH_LINES:
-            return result, False
-        if len(stripped) >= _TITLE_MIN_LENGTH and _letters(stripped) >= _TITLE_MIN_LETTERS:
-            heading = f"# {' '.join(stripped.split())}"
-            del result[index]
-            return [heading, ""] + result, True
-    return result, False
+            break
+        if len(stripped) < _TITLE_MIN_LENGTH or _letters(stripped) < _TITLE_MIN_LETTERS:
+            continue
+        if _is_cover_furniture(stripped):
+            continue
+        candidates.append((index, " ".join(stripped.split())))
+
+    chosen = next(
+        ((index, text) for index, text in candidates if _TITLE_KEYWORD_RE.search(text)),
+        None,
+    )
+    if chosen is None:
+        return result, False
+
+    index, text = chosen
+    del result[index]
+    return [f"# {text}", ""] + result, True
+
+
+def _is_cover_furniture(line: str) -> bool:
+    """Return whether a cover-page line names somebody rather than the report."""
+    return line.endswith(":") or bool(_TITLE_REJECT_RE.search(line))
 
 
 def _collapse_blank_lines(lines: list[str]) -> list[str]:

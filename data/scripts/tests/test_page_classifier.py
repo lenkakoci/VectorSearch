@@ -77,8 +77,13 @@ X■u -
 
 
 def _kind(page: str) -> str:
-    """Classify one page on its own, without run smoothing."""
-    return classify_pages([page])[0]
+    """Classify a page as it would be seen in the middle of a document.
+
+    Never as page one: a leading run of form pages is reclaimed as the cover, so
+    a page on its own always comes back as prose. It is repeated so the run
+    survives smoothing.
+    """
+    return classify_pages([PROSE_PAGE, page, page])[1]
 
 
 def test_report_body_is_prose():
@@ -122,6 +127,20 @@ def test_a_sustained_run_of_forms_survives_smoothing():
     """An annex is long, so smoothing must leave it alone."""
     pages = [PROSE_PAGE, PROSE_PAGE] + [FORM_PAGE] * 4
     assert classify_pages(pages) == [PROSE, PROSE] + [FORM] * 4
+
+
+def test_the_cover_page_stays_with_the_report():
+    """A cover is short lines and no verbs, so it measures as a form.
+
+    It also carries the report's own name, and four of the fifteen reports lost
+    theirs to the annex before this rule - taking "ROUDNO – REKREAČNÍ AREÁL" and
+    "ZÁBŘEH N. M. - VSAKOVACÍ ZKOUŠKY" with it. An annex follows the report; it
+    never opens it.
+    """
+    pages = [FORM_PAGE, FORM_PAGE, PROSE_PAGE, PROSE_PAGE] + [FORM_PAGE] * 4
+    kinds = classify_pages(pages)
+    assert kinds[:2] == [PROSE, PROSE], "the cover belongs to the body"
+    assert kinds[-4:] == [FORM] * 4, "the annex at the back is still an annex"
 
 
 def test_blank_pages_do_not_split_an_annex():
