@@ -50,6 +50,7 @@ from tenacity import (
 
 from chunker import Chunk, chunk_markdown, count_tokens
 from markdown_normalizer import ANNEX_TITLE
+from page_classifier import FORM
 from manifest import Manifest, timestamp_key, utc_now
 from pipeline_common import (
     CHUNKS_DIR,
@@ -248,21 +249,31 @@ def chunk_document(
     # window is wording rebuilt from the contents page and appears nowhere in the
     # extracted page text.
     page_ranges = [locate_pages(chunk.body or chunk.text, pages) for chunk in chunks]
-    kinds = [content_kind(chunk.section) for chunk in chunks]
+
+    kinds_path = MARKDOWN_DIR / f"{stem}.pagekind.json"
+    page_kinds: list[str] = []
+    if kinds_path.exists():
+        page_kinds = json.loads(kinds_path.read_text(encoding="utf-8"))
+    kinds = [content_kind(page_range[0], page_kinds) for page_range in page_ranges]
 
     return payload["document_id"], chunks, embed_texts, page_ranges, kinds
 
 
-def content_kind(section: str | None) -> str:
-    """Return whether a chunk is report prose or annex material.
+def content_kind(page_from: int | None, page_kinds: list[str]) -> str:
+    """Return whether a chunk is worth embedding, from the page it came off.
 
-    Read off the section path rather than the page map: the normaliser files the
-    annex under its own heading, so the label is exact for every chunk, while
-    locate_pages resolves only 86-98% of them.
+    Deliberately not read off the section path. Everything behind the annex
+    boundary is *cited* as an annex, which is what makes the citation honest, but
+    a good part of it is prose worth searching: borehole documentation sheets
+    carry the lithology descriptions users actually look for. Only a filled-in
+    form has nothing for a vector to match.
+
+    A chunk whose page could not be resolved counts as prose, so an unresolved
+    page costs an embedding rather than a hole in the index.
     """
-    if section and section.split(" > ")[-1] == ANNEX_TITLE:
-        return ANNEX
-    return PROSE
+    if not page_from or page_from > len(page_kinds):
+        return PROSE
+    return ANNEX if page_kinds[page_from - 1] == FORM else PROSE
 
 
 def process_one(

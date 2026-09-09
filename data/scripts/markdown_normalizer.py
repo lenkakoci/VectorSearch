@@ -731,7 +731,9 @@ def _alnum_count(text: str) -> int:
     return sum(1 for char in text if char.isalnum())
 
 
-def _partition_annex(pages: list[str], page_kinds: list[str]) -> tuple[str, str, int]:
+def _partition_annex(
+    pages: list[str], page_kinds: list[str], outline: dict[str, str]
+) -> tuple[str, str, int]:
     """Split pages into the report body and its annex.
 
     Returns the body text, the annex text and the number of body pages carrying
@@ -740,17 +742,56 @@ def _partition_annex(pages: list[str], page_kinds: list[str]) -> tuple[str, str,
     are bundles of ten and four sub-reports, each with its own annexes, so the
     form pages are interleaved with prose all the way through.
     """
+    start = _annex_start(pages, page_kinds, outline)
     body: list[str] = []
     annex: list[str] = []
     body_pages = 0
-    for page, kind in zip(pages, page_kinds):
-        if kind == FORM:
+    for index, (page, kind) in enumerate(zip(pages, page_kinds)):
+        if kind == FORM or index >= start:
             annex.append(page)
             continue
         body.append(page)
         if page.strip():
             body_pages += 1
     return "\n".join(body), "\n".join(annex), body_pages
+
+
+def _annex_start(pages: list[str], page_kinds: list[str], outline: dict[str, str]) -> int:
+    """Return the page index where the annex region begins.
+
+    Form pages alone are not the whole annex. Borehole documentation sheets are
+    prose by every measure - long lines, whole clauses, the most searched text in
+    the corpus - but they sit behind the last chapter, and with nothing to say
+    otherwise they inherit its heading: 85 chunks of Myslinka were cited as
+    "8.4. Závěrečné zhodnocení průzkumu kontaminace", spanning pages 43 to 148
+    where section 8.4 itself ends on page 44.
+
+    The boundary is the first form page after the last page that still carries a
+    numbered heading. That holds for a plain report, where the annex follows the
+    final chapter, and for a bundle, where the sub-reports keep numbering to the
+    end and the boundary therefore lands late rather than swallowing them.
+    """
+    # The number has to be one the contents page lists. Without that check a
+    # sentence opening with a figure - "4 EO (ekvivalentní obyvatele) z každé
+    # projektované stavby RD" on page 43 of one report - counts as the last
+    # heading and pushes the boundary past the annex entirely.
+    if not outline:
+        return len(pages)
+
+    last_heading = -1
+    for index, (page, kind) in enumerate(zip(pages, page_kinds)):
+        if kind == FORM:
+            continue
+        for line in page.splitlines():
+            match = _NUMBERED_RE.match(line.strip())
+            if match is not None and match.group(1) in outline and _is_section_title(match.group(2)):
+                last_heading = index
+                break
+
+    for index in range(last_heading + 1, len(pages)):
+        if page_kinds[index] == FORM:
+            return index
+    return len(pages)
 
 
 def normalize_markdown(
@@ -782,7 +823,10 @@ def normalize_markdown(
     """
     annex = ""
     if pages is not None and page_kinds is not None:
-        raw, annex, page_count = _partition_annex(pages, page_kinds)
+        # The outline is needed to place the annex boundary, so it is read
+        # from the raw pages before the body is split off.
+        _, outline, _, _ = _extract_toc("\n".join(pages).splitlines())
+        raw, annex, page_count = _partition_annex(pages, page_kinds, outline)
 
     normalised, stats = _rebuild(raw, page_count, strip_furniture=True)
 
