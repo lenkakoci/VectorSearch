@@ -244,7 +244,10 @@ def chunk_document(
     pages: list[str] = []
     if pages_path.exists():
         pages = json.loads(pages_path.read_text(encoding="utf-8"))
-    page_ranges = [locate_pages(chunk.text, pages) for chunk in chunks]
+    # Probe with the body, not the whole chunk: the heading prefixed to every
+    # window is wording rebuilt from the contents page and appears nowhere in the
+    # extracted page text.
+    page_ranges = [locate_pages(chunk.body or chunk.text, pages) for chunk in chunks]
     kinds = [content_kind(chunk.section) for chunk in chunks]
 
     return payload["document_id"], chunks, embed_texts, page_ranges, kinds

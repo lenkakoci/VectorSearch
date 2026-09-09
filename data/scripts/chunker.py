@@ -44,7 +44,7 @@ _ENCODING = tiktoken.get_encoding("cl100k_base")
 # those untouched, so without this the database keeps chunks from the previous
 # algorithm and the manifest reports them as current. Bump on any behavioural
 # change here.
-CHUNKER_VERSION = 2
+CHUNKER_VERSION = 3
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
@@ -57,6 +57,10 @@ class Chunk:
     section: str | None
     text: str
     token_count: int
+    # ``text`` without the heading line prefixed to it. The heading is wording
+    # the normaliser rebuilt from the contents page, so it appears nowhere in the
+    # extracted page text; probing page attribution with it matches nothing.
+    body: str = ""
 
 
 def count_tokens(text: str) -> int:
@@ -230,9 +234,23 @@ def chunk_markdown(
     merged = _merge_small(pieces, min_tokens, max_tokens)
 
     return [
-        Chunk(chunk_index=index, section=section, text=text, token_count=count_tokens(text))
+        Chunk(
+            chunk_index=index,
+            section=section,
+            text=text,
+            token_count=count_tokens(text),
+            body=_strip_heading(text, section),
+        )
         for index, (section, text) in enumerate(merged)
     ]
+
+
+def _strip_heading(text: str, section: str | None) -> str:
+    """Return ``text`` without the heading line ``chunk_markdown`` prefixed."""
+    if not section:
+        return text
+    prefix = f"{section.split(' > ')[-1]}\n\n"
+    return text[len(prefix) :] if text.startswith(prefix) else text
 
 
 def _merge_small(

@@ -133,6 +133,23 @@ def test_every_window_carries_its_heading():
     assert not missing, f"windows without their heading: {missing}"
 
 
+def test_body_carries_the_text_without_the_heading():
+    """Page attribution matches a chunk against the extracted page text.
+
+    The heading is wording the normaliser rebuilt from the contents page, so it
+    appears nowhere on the page it names. Prefixing it to every window dropped
+    page coverage from 86-98% to 7-33% until locate_pages was pointed at the
+    body instead.
+    """
+    body = "## Hydrogeologické poměry\n\n" + "\n\n".join(_distinct_paragraphs(6, 70))
+    chunks = chunk_markdown(body, max_tokens=200, overlap=50, min_tokens=1)
+
+    for chunk in chunks:
+        assert "Hydrogeologické poměry" in chunk.text
+        assert not chunk.body.startswith("Hydrogeologické poměry")
+        assert chunk.body in chunk.text
+
+
 def test_merging_never_moves_text_under_another_sections_label():
     """``_merge_small`` merges forward and keeps the *previous* label.
 
