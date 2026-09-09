@@ -70,17 +70,23 @@ ON CONFLICT (source_file) DO UPDATE SET
 
 _INSERT_CHUNK = """
 INSERT INTO public.document_chunks (
-    chunk_id, document_id, chunk_index, section, page_from, page_to,
+    chunk_id, document_id, chunk_index, section, content_kind, page_from, page_to,
     chunk_raw, chunk_text, token_count, embedding
 ) VALUES (
-    %s, %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s, %s, %s,
     %s, %s, %s, %s::vector
 )
 """
 
 
-def to_pgvector(values: Any) -> str:
-    """Format an embedding as a pgvector literal."""
+def to_pgvector(values: Any) -> str | None:
+    """Format an embedding as a pgvector literal, or None when there is none.
+
+    Annex chunks are imported without one: they stay searchable by keyword
+    through fts_chunk, and the vector query filters on embedding IS NOT NULL.
+    """
+    if values is None or (hasattr(values, "__len__") and len(values) == 0):
+        return None
     return "[" + ",".join(f"{float(value):.6f}" for value in values) + "]"
 
 
@@ -140,6 +146,7 @@ def import_document(cursor, payload: dict[str, Any], frame: pd.DataFrame) -> int
             row.document_id,
             int(row.chunk_index),
             row.section,
+            getattr(row, "content_kind", "prose") or "prose",
             _optional_int(row.page_from),
             _optional_int(row.page_to),
             row.chunk_raw,

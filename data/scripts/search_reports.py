@@ -63,7 +63,8 @@ logger = logging.getLogger(__name__)
 RRF_K = 60
 
 _VECTOR_QUERY = """
-SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.page_from, c.page_to,
+SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.content_kind,
+       c.page_from, c.page_to,
        c.chunk_raw, d.title, d.locality, d.report_date,
        1 - (c.embedding <=> %s::vector) AS score
 FROM public.document_chunks c
@@ -74,7 +75,8 @@ LIMIT %s
 """
 
 _FTS_QUERY = """
-SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.page_from, c.page_to,
+SELECT c.chunk_id, c.document_id, c.chunk_index, c.section, c.content_kind,
+       c.page_from, c.page_to,
        c.chunk_raw, d.title, d.locality, d.report_date,
        ts_rank(c.fts_chunk, query) AS score
 FROM public.document_chunks c
@@ -169,7 +171,8 @@ def render(rows: list[dict[str, Any]], score_key: str) -> None:
                 pages = f", s. {row['page_from']}-{row['page_to']}"
         snippet = " ".join((row.get("chunk_raw") or "").split())[:220]
         print(f"\n{position}. [{row[score_key]:.4f}] {row.get('title') or '(bez nazvu)'}")
-        print(f"   sekce: {location}{pages} | chunk #{row['chunk_index']}")
+        kind = " | PŘÍLOHA" if row.get("content_kind") == "annex" else ""
+        print(f"   sekce: {location}{pages} | chunk #{row['chunk_index']}{kind}")
         print(f"   {snippet}...")
     print()
 

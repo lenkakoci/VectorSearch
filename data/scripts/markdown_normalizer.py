@@ -46,7 +46,8 @@ MARKDOWN_VERSION = 6
 # The heading the annex is filed under. Without one it inherits the last
 # chapter's label, which is how 130 of 216 chunks in one report came to be cited
 # as "8.4. Závěrečné zhodnocení průzkumu kontaminace".
-_ANNEX_HEADING = "## Přílohy"
+ANNEX_TITLE = "Přílohy"
+ANNEX_HEADING = f"## {ANNEX_TITLE}"
 
 # A pipe block is layout, not data, when most of its cells are empty. Real
 # tables in these reports (borehole profiles, laboratory results) are densely
@@ -866,5 +867,5 @@ def _append_annex(body: str, annex: str, headings: int) -> str:
     """
     if not annex.strip():
         return body
-    separator = f"\n\n{_ANNEX_HEADING}\n\n" if headings else "\n\n"
+    separator = f"\n\n{ANNEX_HEADING}\n\n" if headings else "\n\n"
     return body.rstrip() + separator + annex.strip() + "\n"

@@ -269,16 +269,26 @@ def check_chunks(
         )
     )
 
-    if total >= _SECTION_DOMINANCE_MIN_CHUNKS:
-        counts = frame["section"].value_counts(dropna=False)
+    # The annex is one legitimately huge section, so counting it would make every
+    # report with one look as though its structure had collapsed. It is measured
+    # on its own line instead.
+    body = frame[frame["content_kind"] == "prose"] if "content_kind" in frame else frame
+    if "content_kind" in frame:
+        annex = total - len(body)
+        checks.append(
+            Check("přílohy", OK, f"{annex}/{total} chunků je příloha, nezaembeddováno")
+        )
+
+    if len(body) >= _SECTION_DOMINANCE_MIN_CHUNKS:
+        counts = body["section"].value_counts(dropna=False)
         top_label, top_count = str(counts.index[0]), int(counts.iloc[0])
-        share = top_count / total
-        trailing = _trailing_section_run(list(frame["section"]))
+        share = top_count / len(body)
+        trailing = _trailing_section_run(list(body["section"]))
         checks.append(
             _check(
                 "kvalita sekcí",
                 share <= _SECTION_DOMINANCE_WARN,
-                f"největší sekce drží {top_count}/{total} chunků ({share:.0%}), "
+                f"největší sekce drží {top_count}/{len(body)} chunků ({share:.0%}), "
                 f"koncový běh {trailing}"
                 + (
                     ""
@@ -301,7 +311,8 @@ def check_chunks(
             )
         )
 
-    dims = {len(vector) for vector in frame["embedding"]}
+    # Annex chunks carry no embedding by design; only the prose side has dims.
+    dims = {len(vector) for vector in frame["embedding"] if vector is not None}
     checks.append(
         _check(
             "embeddingy",

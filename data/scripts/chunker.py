@@ -44,7 +44,7 @@ _ENCODING = tiktoken.get_encoding("cl100k_base")
 # those untouched, so without this the database keeps chunks from the previous
 # algorithm and the manifest reports them as current. Bump on any behavioural
 # change here.
-CHUNKER_VERSION = 1
+CHUNKER_VERSION = 2
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
@@ -111,6 +111,12 @@ def _split_paragraphs(body: str) -> list[str]:
     return [part.strip() for part in re.split(r"\n\s*\n", body) if part.strip()]
 
 
+def _tail_tokens(text: str, tokens: int) -> str:
+    """Return the last ``tokens`` tokens of ``text``."""
+    encoded = _ENCODING.encode(text)
+    return _ENCODING.decode(encoded[-tokens:]).strip() if tokens > 0 else ""
+
+
 def _window_tokens(body: str, max_tokens: int, overlap: int) -> list[str]:
     """Split an oversized body into overlapping windows on paragraph boundaries.
 
@@ -122,8 +128,16 @@ def _window_tokens(body: str, max_tokens: int, overlap: int) -> list[str]:
     current_tokens = 0
 
     def flush_current() -> None:
-        if current:
-            windows.append("\n\n".join(current))
+        if not current:
+            return
+        text = "\n\n".join(current)
+        # The budget below counts paragraphs and separators, but joining can
+        # retokenise across a boundary and add a little more. Measure the real
+        # thing once per window and cut on the token grid if it still overshoots.
+        if count_tokens(text) > max_tokens:
+            windows.extend(_split_hard(text, max_tokens, overlap))
+        else:
+            windows.append(text)
 
     for paragraph in _split_paragraphs(body):
         para_tokens = count_tokens(paragraph)
@@ -134,7 +148,8 @@ def _window_tokens(body: str, max_tokens: int, overlap: int) -> list[str]:
             windows.extend(_split_hard(paragraph, max_tokens, overlap))
             continue
 
-        if current_tokens + para_tokens > max_tokens and current:
+        # len(current) is how many "\n\n" separators the join will add.
+        if current and current_tokens + para_tokens + len(current) > max_tokens:
             flush_current()
             # Carry trailing paragraphs back as overlap.
             carry: list[str] = []
@@ -145,6 +160,13 @@ def _window_tokens(body: str, max_tokens: int, overlap: int) -> list[str]:
                     break
                 carry.insert(0, previous)
                 carry_tokens += previous_tokens
+            if not carry:
+                # Every trailing paragraph is bigger than the overlap budget, so
+                # whole-paragraph carry delivers nothing and consecutive windows
+                # share no text at all. Cut the tail of the last one instead.
+                tail = _tail_tokens(current[-1], overlap)
+                if tail:
+                    carry, carry_tokens = [tail], count_tokens(tail)
             current, current_tokens = carry, carry_tokens
 
         current.append(paragraph)
@@ -192,12 +214,18 @@ def chunk_markdown(
 
     pieces: list[tuple[str | None, str]] = []
     for section in _split_sections(markdown):
+        # The heading goes on every window, not only the first. fts_chunk is
+        # built from chunk_raw, so with it on the first alone a keyword search
+        # for a section name cannot reach any continuation of a long section.
         heading_prefix = f"{section.section.split(' > ')[-1]}\n\n" if section.section else ""
-        body = heading_prefix + section.body
-        if count_tokens(body) > max_tokens:
-            pieces.extend((section.section, window) for window in _window_tokens(body, max_tokens, overlap))
+        budget = max_tokens - count_tokens(heading_prefix)
+        if count_tokens(heading_prefix + section.body) > max_tokens:
+            pieces.extend(
+                (section.section, heading_prefix + window)
+                for window in _window_tokens(section.body, budget, overlap)
+            )
         else:
-            pieces.append((section.section, body))
+            pieces.append((section.section, heading_prefix + section.body))
 
     merged = _merge_small(pieces, min_tokens, max_tokens)
 
@@ -212,7 +240,13 @@ def _merge_small(
     min_tokens: int,
     max_tokens: int,
 ) -> list[tuple[str | None, str]]:
-    """Merge undersized pieces forward, keeping the first piece's section label."""
+    """Merge undersized pieces into their neighbour within the same section.
+
+    Merging across a heading boundary used to keep the *previous* piece's label,
+    so an undersized section was cited as the one above it. Sections are the
+    citation unit, so a small section now stays its own chunk rather than borrow
+    somebody else's name for its text.
+    """
     merged: list[tuple[str | None, str]] = []
     for section, text in pieces:
         if not merged:
@@ -220,6 +254,10 @@ def _merge_small(
             continue
 
         previous_section, previous_text = merged[-1]
+        if section != previous_section:
+            merged.append((section, text))
+            continue
+
         previous_tokens = count_tokens(previous_text)
         current_tokens = count_tokens(text)
 

@@ -49,6 +49,7 @@ from tenacity import (
 )
 
 from chunker import Chunk, chunk_markdown, count_tokens
+from markdown_normalizer import ANNEX_TITLE
 from manifest import Manifest, timestamp_key, utc_now
 from pipeline_common import (
     CHUNKS_DIR,
@@ -72,11 +73,17 @@ _CHUNK_NAMESPACE = uuid.UUID("2d4a7f61-93b8-4e05-8c7a-1f6d0b39e254")
 _INPUT_TOKEN_LIMIT = 2048
 _INPUT_TOKEN_WARN = 1500
 
+# What a chunk is made of. Annex material is kept and indexed for full text
+# but never embedded - see process_one.
+PROSE = "prose"
+ANNEX = "annex"
+
 PARQUET_COLUMNS = [
     "document_id",
     "chunk_id",
     "chunk_index",
     "section",
+    "content_kind",
     "page_from",
     "page_to",
     "chunk_raw",
@@ -208,10 +215,10 @@ def locate_pages(chunk_text: str, pages: list[str]) -> tuple[int | None, int | N
 def chunk_document(
     stem: str,
     settings: Settings,
-) -> tuple[str, list[Chunk], list[str], list[tuple[int | None, int | None]]]:
+) -> tuple[str, list[Chunk], list[str], list[tuple[int | None, int | None]], list[str]]:
     """Chunk one document and build the texts that will be embedded.
 
-    Returns (document_id, chunks, embed_texts, page_ranges).
+    Returns (document_id, chunks, embed_texts, page_ranges, content_kinds).
     """
     extracted_path = EXTRACTED_DIR / f"{stem}.json"
     markdown_path = MARKDOWN_DIR / f"{stem}.md"
@@ -238,8 +245,21 @@ def chunk_document(
     if pages_path.exists():
         pages = json.loads(pages_path.read_text(encoding="utf-8"))
     page_ranges = [locate_pages(chunk.text, pages) for chunk in chunks]
+    kinds = [content_kind(chunk.section) for chunk in chunks]
 
-    return payload["document_id"], chunks, embed_texts, page_ranges
+    return payload["document_id"], chunks, embed_texts, page_ranges, kinds
+
+
+def content_kind(section: str | None) -> str:
+    """Return whether a chunk is report prose or annex material.
+
+    Read off the section path rather than the page map: the normaliser files the
+    annex under its own heading, so the label is exact for every chunk, while
+    locate_pages resolves only 86-98% of them.
+    """
+    if section and section.split(" > ")[-1] == ANNEX_TITLE:
+        return ANNEX
+    return PROSE
 
 
 def process_one(
@@ -251,25 +271,41 @@ def process_one(
     manifest: Manifest,
 ) -> int:
     """Chunk, embed and cache one document. Returns the chunk count."""
-    document_id, chunks, embed_texts, page_ranges = chunk_document(stem, settings)
+    document_id, chunks, embed_texts, page_ranges, kinds = chunk_document(stem, settings)
     if not chunks:
         logger.warning("No chunks produced for %s", stem)
         return 0
 
+    annex = kinds.count(ANNEX)
     logger.info(
-        "%s: %d chunks (%d-%d tokens)",
+        "%s: %d chunks (%d-%d tokens), %d annex not embedded",
         stem,
         len(chunks),
         min(chunk.token_count for chunk in chunks),
         max(chunk.token_count for chunk in chunks),
+        annex,
     )
 
     if generator is None:
-        for chunk in chunks:
-            logger.info("  [%02d] %-40s %4d tok", chunk.chunk_index, (chunk.section or "-")[:40], chunk.token_count)
+        for chunk, kind in zip(chunks, kinds):
+            logger.info(
+                "  [%02d] %-40s %4d tok %s",
+                chunk.chunk_index,
+                (chunk.section or "-")[:40],
+                chunk.token_count,
+                "" if kind == PROSE else "(annex)",
+            )
         return len(chunks)
 
-    vectors = generator.embed(embed_texts)
+    # Annex chunks are borehole logs, laboratory certificates and coordinate
+    # tables. They stay in chunk_raw and therefore in the full-text index, so a
+    # borehole number is still findable, but a form has nothing for semantic
+    # search to match and embedding them would be most of the bill. The vector
+    # query already reads WHERE embedding IS NOT NULL.
+    embedded = [index for index, kind in enumerate(kinds) if kind == PROSE]
+    vectors: list[list[float] | None] = [None] * len(chunks)
+    for index, vector in zip(embedded, generator.embed([embed_texts[i] for i in embedded])):
+        vectors[index] = vector
 
     rows = [
         {
@@ -277,6 +313,7 @@ def process_one(
             "chunk_id": str(uuid.uuid5(_CHUNK_NAMESPACE, f"{document_id}:{chunk.chunk_index}")),
             "chunk_index": chunk.chunk_index,
             "section": chunk.section,
+            "content_kind": kind,
             "page_from": page_range[0],
             "page_to": page_range[1],
             "chunk_raw": chunk.text,
@@ -284,7 +321,9 @@ def process_one(
             "token_count": chunk.token_count,
             "embedding": vector,
         }
-        for chunk, embed_text, vector, page_range in zip(chunks, embed_texts, vectors, page_ranges)
+        for chunk, embed_text, vector, page_range, kind in zip(
+            chunks, embed_texts, vectors, page_ranges, kinds
+        )
     ]
 
     frame = pd.DataFrame(rows, columns=PARQUET_COLUMNS)

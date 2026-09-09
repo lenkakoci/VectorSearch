@@ -32,10 +32,14 @@ def _distinct_paragraphs(count: int, target_tokens: int) -> list[str]:
     return [f"sonda-{index}: {_paragraph(target_tokens, f'vrstva{index}')}" for index in range(count)]
 
 
-def _longest_common_boundary(first: str, second: str) -> int:
-    """Return how many characters of ``first``'s tail open ``second``."""
+def _shared_tail(first: str, second: str) -> int:
+    """Return how many characters of ``first``'s tail reappear in ``second``.
+
+    Not a prefix test: every window opens with its section heading, so carried
+    text starts just after it rather than at position zero.
+    """
     for size in range(min(len(first), len(second)), 0, -1):
-        if first[-size:] == second[:size]:
+        if first[-size:] in second:
             return size
     return 0
 
@@ -105,7 +109,7 @@ def test_consecutive_windows_of_a_section_overlap():
     without_overlap = [
         index
         for index in range(len(chunks) - 1)
-        if _longest_common_boundary(chunks[index].text, chunks[index + 1].text) == 0
+        if _shared_tail(chunks[index].text, chunks[index + 1].text) == 0
     ]
     assert not without_overlap, f"window pairs with no overlap: {without_overlap}"
 
