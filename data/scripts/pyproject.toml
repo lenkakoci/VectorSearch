@@ -21,3 +21,15 @@ dependencies = [
     # tokenizer, so counts are approximate - see chunker.py.
     "tiktoken>=0.8.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# The pipeline scripts are flat modules imported by name (``from chunker import
+# ...``), so the scripts directory has to be on the path for the tests to reach
+# them.
+pythonpath = ["."]
+testpaths = ["tests"]
