@@ -62,9 +62,35 @@ _MAX_SENSIBLE_TOKENS = 1500
 # A blank page or two is a separator; this share of them means scanned annexes.
 _EMPTY_PAGE_WARN = 0.10
 
+# One section holding more than this share of a document means the heading
+# structure ran out somewhere and everything after it inherited the last label.
+# Measured: Myslinka 60%, Pazderna 43%, Novy Opatov 39% - all of them annexes
+# cited as the final chapter - against 7-21% for the reports whose structure is
+# intact. Counting sections that are merely present says nothing about this:
+# those three documents all report 100% coverage.
+_SECTION_DOMINANCE_WARN = 0.30
+
+# Under this many chunks a document has too few sections for the share to mean
+# anything.
+_SECTION_DOMINANCE_MIN_CHUNKS = 10
+
 _TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
 _WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
+
+def _trailing_section_run(sections: list[Any]) -> int:
+    """Return how many chunks at the end of the document share one section.
+
+    The annex sits at the back, so a long run is the shape the dominance share
+    only hints at: it says the label stopped changing and never resumed.
+    """
+    run = 0
+    for value in reversed(sections):
+        if value != sections[-1]:
+            break
+        run += 1
+    return run
 
 
 def _looks_like_furniture(signature: str) -> bool:
@@ -238,6 +264,26 @@ def check_chunks(
             + ("" if with_section == total else " - citace budou neúplné"),
         )
     )
+
+    if total >= _SECTION_DOMINANCE_MIN_CHUNKS:
+        counts = frame["section"].value_counts(dropna=False)
+        top_label, top_count = str(counts.index[0]), int(counts.iloc[0])
+        share = top_count / total
+        trailing = _trailing_section_run(list(frame["section"]))
+        checks.append(
+            _check(
+                "kvalita sekcí",
+                share <= _SECTION_DOMINANCE_WARN,
+                f"největší sekce drží {top_count}/{total} chunků ({share:.0%}), "
+                f"koncový běh {trailing}"
+                + (
+                    ""
+                    if share <= _SECTION_DOMINANCE_WARN
+                    else f" - '{top_label[-48:]}' zřejmě pohltila přílohu"
+                ),
+                warn_only=True,
+            )
+        )
 
     if is_pdf:
         with_page = int(frame["page_from"].notna().sum())
