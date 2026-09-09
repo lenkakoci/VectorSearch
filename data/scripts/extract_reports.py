@@ -235,6 +235,8 @@ def process_one(
         if pages:
             _write_page_map(path.stem, pages)
             _write_page_kinds(path.stem, page_kinds)
+        if stats is not None:
+            _write_removals(path.stem, stats)
         manifest.update(
             key,
             sha256=sha,
@@ -314,6 +316,24 @@ def _write_page_map(stem: str, pages: list[str]) -> None:
     """Persist per-page text so the chunker can attribute page ranges."""
     target = MARKDOWN_DIR / f"{stem}.pages.json"
     target.write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_removals(stem: str, stats: NormalizationStats) -> None:
+    """Persist what the normaliser deleted and why.
+
+    Deletion is the only step that can take real content without anything
+    downstream noticing, so it is the one that has to be inspectable. Read it
+    with ``check_pipeline.py --removed``.
+    """
+    target = MARKDOWN_DIR / f"{stem}.removed.json"
+    payload = {
+        "furniture_kept": stats.furniture_kept,
+        "removals": [
+            {"reason": removal.reason, "detail": removal.detail, "lines": removal.lines}
+            for removal in stats.removals
+        ],
+    }
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _write_page_kinds(stem: str, page_kinds: list[str]) -> None:

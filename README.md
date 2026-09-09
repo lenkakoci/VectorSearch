@@ -127,6 +127,28 @@ paginace), mapu stránek, extrakci a její schéma, počet a velikost chunků, �
 shodu s databází, naplněný fulltextový index a nakonec zkusí slova ze středu
 dokumentu opravdu vyhledat.
 
+`--triage` vypíše jen to, co potřebuje rozhodnutí, seskupené podle toho, co s tím
+dělat. `--removed` ukáže, co normalizátor z dokumentu smazal a podle jakého
+pravidla:
+
+```powershell
+uv run python check_pipeline.py --removed --only Roudno
+```
+```
+Roudno  -  odstraněno 67 řádků
+
+  ZÁHLAVÍ/PATIČKA  (32 řádků)
+        32x  Roudno - rekreační areál (práh 9)
+
+  OBSAH  (35 řádků)
+        35x  23 položek od 'Úvod'
+```
+
+Mazání opakovaných řádků je jediný krok, který může vzít skutečný obsah, aniž by
+to dál kdokoli poznal — proto je jako jediný takhle rozepsaný. Když by mazání
+sebralo víc než čtvrtinu textu, normalizátor ho zopakuje **bez mazání záhlaví**,
+aby nepřišel o nadpisy; zbylé záhlaví se pak ohlásí jako `zbytky konverze`.
+
 ## Datový model
 
 **`documents`** — jeden řádek na posudek. Typované sloupce tvoří stabilní jádro

@@ -31,7 +31,7 @@ import logging
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from page_classifier import FORM
@@ -101,6 +101,9 @@ _TOC_CAPTION_RE = re.compile(r"^obsah\b", re.IGNORECASE)
 _TRAILING_NUMBER_RE = re.compile(r"\s*\d{1,4}$")
 _BARE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)+\.?$")
 
+# What separates a running header from a column of measurements: a word.
+_FURNITURE_WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+
 # What a cover page says about itself. Every one of these produced a real title
 # in the corpus: "NOVÁKOVÝCH 6, PRAHA 8, 180 00", "Ing. Roman Králík",
 # "DIAMO, státní podnik", "Objednatel:", "Rozdělovník:". The heading path of
@@ -131,6 +134,21 @@ _TOC_MAX_GAP = 40
 
 
 @dataclass
+class Removal:
+    """One group of lines the normaliser deleted, and what made it delete them.
+
+    Deletion is the one step here that can fail silently: a threshold meant for
+    pagination can reach real content, and nothing downstream can tell the
+    difference. Grouping by what was matched keeps the record readable even when
+    twelve thousand lines go - fifty signatures rather than twelve thousand lines.
+    """
+
+    reason: str
+    detail: str
+    lines: int
+
+
+@dataclass
 class NormalizationStats:
     """What the normaliser changed, for logging and for tuning on new reports."""
 
@@ -139,6 +157,8 @@ class NormalizationStats:
     tables_unwrapped: int
     furniture_dropped: int
     toc_lines_dropped: int
+    removals: list[Removal] = field(default_factory=list)
+    furniture_kept: bool = False
 
 
 def fold(text: str) -> str:
@@ -228,10 +248,20 @@ def _signature(line: str) -> str | None:
     if not collapsed or len(collapsed) > _FURNITURE_MAX_LENGTH:
         return None
     key = _TRAILING_NUMBER_RE.sub("", collapsed)
-    return key if len(key) >= _FURNITURE_MIN_SIGNATURE else None
+    if len(key) < _FURNITURE_MIN_SIGNATURE:
+        return None
+    # A running header is words; a laboratory table is numbers. Without this,
+    # "<0," repeating down a column of results crosses the threshold like any
+    # header and 852 lines of measurements are deleted across the corpus as
+    # pagination - the silent loss the text-loss guard exists to catch. It is
+    # the rule check_pipeline already applies when deciding whether a repeated
+    # line is worth reporting; deletion was simply not using it.
+    return key if _FURNITURE_WORD_RE.search(key) else None
 
 
-def _strip_page_furniture(lines: list[str], page_count: int | None) -> tuple[list[str], int]:
+def _strip_page_furniture(
+    lines: list[str], page_count: int | None
+) -> tuple[list[str], int, list[Removal]]:
     """Drop short lines that repeat across most pages."""
     threshold = _FURNITURE_MIN_REPEATS
     if page_count:
@@ -245,10 +275,18 @@ def _strip_page_furniture(lines: list[str], page_count: int | None) -> tuple[lis
 
     furniture = {key for key, count in counts.items() if count >= threshold}
     if not furniture:
-        return lines, 0
+        return lines, 0, []
 
     kept = [line for line in lines if _signature(line) not in furniture]
-    return kept, len(lines) - len(kept)
+    removals = [
+        Removal(
+            reason="furniture",
+            detail=f"{signature} (práh {threshold})",
+            lines=counts[signature],
+        )
+        for signature in sorted(furniture, key=lambda key: -counts[key])
+    ]
+    return kept, len(lines) - len(kept), removals
 
 
 def _extract_toc(lines: list[str]) -> tuple[list[str], dict[str, str], int]:
@@ -260,7 +298,7 @@ def _extract_toc(lines: list[str]) -> tuple[list[str], dict[str, str], int]:
     """
     matches = [index for index, line in enumerate(lines) if _TOC_ENTRY_RE.match(line.strip())]
     if len(matches) < _HEURISTIC_MIN_HEADINGS:
-        return lines, {}, 0
+        return lines, {}, 0, []
 
     # A contents page is a dense run of entries, so entries far apart belong to
     # different blocks. Taking first-to-last as one span deleted 91% of two
@@ -280,6 +318,7 @@ def _extract_toc(lines: list[str]) -> tuple[list[str], dict[str, str], int]:
                 outline.setdefault(match.group(1), match.group(2))
 
     dropped = 0
+    removals: list[Removal] = []
     remaining = lines
     for block in reversed(blocks):
         start, end = block[0], block[-1]
@@ -289,9 +328,18 @@ def _extract_toc(lines: list[str]) -> tuple[list[str], dict[str, str], int]:
         if start > 0 and _TOC_CAPTION_RE.match(remaining[start - 1].strip()):
             start -= 1
         dropped += end + 1 - start
+        first = _TOC_ENTRY_RE.match(remaining[block[0]].strip())
+        removals.append(
+            Removal(
+                reason="contents",
+                detail=f"{len(block)} položek od '{first.group(2)[:40] if first else '?'}'",
+                lines=end + 1 - start,
+            )
+        )
         remaining = remaining[:start] + remaining[end + 1 :]
 
-    return remaining, outline, dropped
+    removals.reverse()
+    return remaining, outline, dropped, removals
 
 
 def _number_tuple(number: str) -> tuple[int, ...]:
@@ -735,11 +783,51 @@ def normalize_markdown(
     if pages is not None and page_kinds is not None:
         raw, annex, page_count = _partition_annex(pages, page_kinds)
 
+    normalised, stats = _rebuild(raw, page_count, strip_furniture=True)
+
+    if _alnum_loss(raw, normalised) > _MAX_ALNUM_LOSS:
+        # Furniture detection is the destructive step, so try again without it
+        # before giving up on the whole normalisation. Losing the headings costs
+        # every chunk its citation; keeping the running headers only costs noise,
+        # and check_pipeline reports that noise as "zbytky konverze".
+        logger.warning(
+            "Normalisation would drop %.0f%% of the text; retrying without furniture removal",
+            _alnum_loss(raw, normalised) * 100,
+        )
+        relaxed, relaxed_stats = _rebuild(raw, page_count, strip_furniture=False)
+        if _alnum_loss(raw, relaxed) <= _MAX_ALNUM_LOSS:
+            normalised, stats = relaxed, relaxed_stats
+        else:
+            logger.warning("Still over the limit; keeping the raw conversion")
+            return _append_annex(raw, annex, headings=0), NormalizationStats(0, "none", 0, 0, 0)
+
+    if stats.source == "none":
+        logger.warning("No headings recovered; chunks will have no section citation")
+
+    if annex.strip() and stats.headings > 0:
+        stats.headings += 1
+    return _append_annex(normalised, annex, stats.headings), stats
+
+
+def _alnum_loss(raw: str, normalised: str) -> float:
+    """Return the share of letters and digits the normalisation dropped."""
+    original = _alnum_count(raw)
+    return 1 - _alnum_count(normalised) / original if original else 0.0
+
+
+def _rebuild(
+    raw: str, page_count: int | None, *, strip_furniture: bool
+) -> tuple[str, NormalizationStats]:
+    """Run one normalisation pass and report what it did."""
     lines = raw.splitlines()
 
     lines, tables_unwrapped = _unwrap_tables(lines)
-    lines, furniture_dropped = _strip_page_furniture(lines, page_count)
-    lines, outline, toc_lines_dropped = _extract_toc(lines)
+    if strip_furniture:
+        lines, furniture_dropped, removals = _strip_page_furniture(lines, page_count)
+    else:
+        furniture_dropped, removals = 0, []
+    lines, outline, toc_lines_dropped, toc_removals = _extract_toc(lines)
+    removals.extend(toc_removals)
 
     if outline:
         lines, headings = _apply_outline(lines, outline)
@@ -757,27 +845,14 @@ def normalize_markdown(
         headings += int(titled)
 
     normalised = "\n".join(_collapse_blank_lines(lines)).strip() + "\n"
-
-    original_alnum = _alnum_count(raw)
-    if original_alnum:
-        lost = 1 - _alnum_count(normalised) / original_alnum
-        if lost > _MAX_ALNUM_LOSS:
-            logger.warning(
-                "Normalisation would drop %.0f%% of the text; keeping the raw conversion",
-                lost * 100,
-            )
-            return _append_annex(raw, annex, headings=0), NormalizationStats(0, "none", 0, 0, 0)
-
-    if source == "none":
-        logger.warning("No headings recovered; chunks will have no section citation")
-
-    annex_heading = bool(annex.strip()) and headings > 0
-    return _append_annex(normalised, annex, headings), NormalizationStats(
-        headings=headings + int(annex_heading),
+    return normalised, NormalizationStats(
+        headings=headings,
         source=source,
         tables_unwrapped=tables_unwrapped,
         furniture_dropped=furniture_dropped,
         toc_lines_dropped=toc_lines_dropped,
+        removals=removals,
+        furniture_kept=not strip_furniture,
     )
 
 

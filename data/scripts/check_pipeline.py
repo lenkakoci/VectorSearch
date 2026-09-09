@@ -74,6 +74,10 @@ _SECTION_DOMINANCE_WARN = 0.30
 # anything.
 _SECTION_DOMINANCE_MIN_CHUNKS = 10
 
+# How many removal rules to print per reason. One report matched fifty furniture
+# signatures; the top few are what identify the pattern.
+_REMOVED_SAMPLE = 8
+
 _TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
 _WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
@@ -529,7 +533,41 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--triage", action="store_true",
         help="Print only what needs a decision, grouped by what to do about it",
     )
+    parser.add_argument(
+        "--removed", action="store_true",
+        help="Print what the normaliser deleted from each document and why",
+    )
     return parser.parse_args(argv)
+
+
+def render_removed(stems: list[str]) -> None:
+    """Print what normalisation deleted, grouped by the rule that deleted it.
+
+    Furniture removal is the one step that can take real content with nothing
+    downstream able to tell - the reason the 25% text-loss guard exists at all.
+    This is how to see what it actually took.
+    """
+    for stem in stems:
+        path = MARKDOWN_DIR / f"{stem}.removed.json"
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        removals = payload.get("removals") or []
+        total = sum(item["lines"] for item in removals)
+        print()
+        print("=" * 72)
+        print(f"{stem}  -  odstraněno {total} řádků")
+        if payload.get("furniture_kept"):
+            print("  !  pojistka zabrala: záhlaví se nemazalo, aby se zachovaly nadpisy")
+        for reason, label in (("furniture", "ZÁHLAVÍ/PATIČKA"), ("contents", "OBSAH")):
+            group = [item for item in removals if item["reason"] == reason]
+            if not group:
+                continue
+            print(f"\n  {label}  ({sum(item['lines'] for item in group)} řádků)")
+            for item in group[:_REMOVED_SAMPLE]:
+                print(f"    {item['lines']:>6}x  {item['detail'][:88]}")
+            if len(group) > _REMOVED_SAMPLE:
+                print(f"    … a dalších {len(group) - _REMOVED_SAMPLE} pravidel")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -541,6 +579,11 @@ def main(argv: list[str] | None = None) -> int:
 
     wanted = {Path(item).stem for item in args.only} if args.only else None
     keys = [key for key in manifest.keys() if wanted is None or Path(key).stem in wanted]
+
+    if args.removed:
+        render_removed([Path(key).stem for key in keys])
+        return 0
+
     unconverted = check_unconverted(settings, wanted)
     if not keys and not unconverted:
         logger.warning("Nothing to check; the manifest is empty or --only matched nothing")

@@ -93,11 +93,24 @@ its assumptions, in the order they are worth checking:
 | headings are numbered at all | an unnumbered "Závěr" in bold is never recognised |
 | body and contents wording agree to ~85% | that heading is not promoted |
 | running header/footer repeats on at least half the pages | it stays in the text and pollutes every chunk |
-| that repeated line is under 80 characters | a long footer is not removed |
-| a line repeating on most pages is not content | **it gets deleted as pagination** - the one failure with no warning |
+| that repeated line is under 160 characters | a long footer is not removed |
+| a line repeating on most pages is not content | **it gets deleted as pagination** |
 
-The last one is the only silent one. The 25% text-loss guard is what stands
-behind it: lose more than that and the raw conversion is kept instead.
+The last one used to be silent. Two things now cover it:
+
+- `check_pipeline.py --removed` lists what was deleted from each document and
+  under which rule, grouped by the signature that matched. Run it on anything
+  that looks thin. It is what makes a bundle obvious - eleven separate contents
+  blocks in one file - and what showed that `<0,` repeating down a laboratory
+  column was being removed as pagination.
+- A signature has to contain a word to count as furniture, so a column of
+  measurements is no longer eligible.
+
+The 25% text-loss guard still stands behind all of it, but it is no longer
+all-or-nothing: over the limit, normalisation is retried **without** furniture
+removal, and only if that is still over does the raw conversion win. Losing the
+headings costs every chunk its citation; keeping a running header only costs
+noise, and that noise is reported as `zbytky konverze`.
 
 If a new kind of report breaks the rules structurally - unnumbered headings, a
 contents page laid out as a table - that is a normaliser change, not something to
