@@ -34,12 +34,19 @@ from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from page_classifier import FORM
+
 logger = logging.getLogger(__name__)
 
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 5
+MARKDOWN_VERSION = 6
+
+# The heading the annex is filed under. Without one it inherits the last
+# chapter's label, which is how 130 of 216 chunks in one report came to be cited
+# as "8.4. Závěrečné zhodnocení průzkumu kontaminace".
+_ANNEX_HEADING = "## Přílohy"
 
 # A pipe block is layout, not data, when most of its cells are empty. Real
 # tables in these reports (borehole profiles, laboratory results) are densely
@@ -622,18 +629,59 @@ def _alnum_count(text: str) -> int:
     return sum(1 for char in text if char.isalnum())
 
 
-def normalize_markdown(raw: str, page_count: int | None = None) -> tuple[str, NormalizationStats]:
+def _partition_annex(pages: list[str], page_kinds: list[str]) -> tuple[str, str, int]:
+    """Split pages into the report body and its annex.
+
+    Returns the body text, the annex text and the number of body pages carrying
+    any text - the denominator the furniture threshold needs. Annex pages are
+    pulled out wherever they sit, not only from the tail: two of these reports
+    are bundles of ten and four sub-reports, each with its own annexes, so the
+    form pages are interleaved with prose all the way through.
+    """
+    body: list[str] = []
+    annex: list[str] = []
+    body_pages = 0
+    for page, kind in zip(pages, page_kinds):
+        if kind == FORM:
+            annex.append(page)
+            continue
+        body.append(page)
+        if page.strip():
+            body_pages += 1
+    return "\n".join(body), "\n".join(annex), body_pages
+
+
+def normalize_markdown(
+    raw: str,
+    page_count: int | None = None,
+    *,
+    pages: list[str] | None = None,
+    page_kinds: list[str] | None = None,
+) -> tuple[str, NormalizationStats]:
     """Rebuild headings and strip extraction artefacts in raw page text.
 
     Args:
-        raw: Text exactly as the PDF extractor produced it, pages joined.
+        raw: Text exactly as the PDF extractor produced it, pages joined. Used
+            when no page classification is supplied.
         page_count: Source page count, used to scale the page-furniture
             threshold. Omit it and a fixed minimum applies.
+        pages: The pages themselves, positionally aligned with ``page_kinds``.
+        page_kinds: Per-page classification from ``page_classifier``. Given
+            both, the annex is set aside before anything else runs and appended
+            afterwards, so the furniture threshold and the text-loss guard see
+            the report body alone. That is what they were always calibrated for:
+            with the annex included, one report loses 12278 lines to furniture
+            detection and then trips the guard, which throws away the fifteen
+            headings it had correctly recovered.
 
     Returns:
         The normalised Markdown and what was changed. On a suspiciously large
         loss of text the original is returned unchanged with empty stats.
     """
+    annex = ""
+    if pages is not None and page_kinds is not None:
+        raw, annex, page_count = _partition_annex(pages, page_kinds)
+
     lines = raw.splitlines()
 
     lines, tables_unwrapped = _unwrap_tables(lines)
@@ -665,15 +713,30 @@ def normalize_markdown(raw: str, page_count: int | None = None) -> tuple[str, No
                 "Normalisation would drop %.0f%% of the text; keeping the raw conversion",
                 lost * 100,
             )
-            return raw, NormalizationStats(0, "none", 0, 0, 0)
+            return _append_annex(raw, annex, headings=0), NormalizationStats(0, "none", 0, 0, 0)
 
     if source == "none":
         logger.warning("No headings recovered; chunks will have no section citation")
 
-    return normalised, NormalizationStats(
-        headings=headings,
+    annex_heading = bool(annex.strip()) and headings > 0
+    return _append_annex(normalised, annex, headings), NormalizationStats(
+        headings=headings + int(annex_heading),
         source=source,
         tables_unwrapped=tables_unwrapped,
         furniture_dropped=furniture_dropped,
         toc_lines_dropped=toc_lines_dropped,
     )
+
+
+def _append_annex(body: str, annex: str, headings: int) -> str:
+    """Put the annex back, under a heading of its own where one is warranted.
+
+    The heading is what stops the annex inheriting the last chapter's label, so
+    it only makes sense once the body has chapters. Adding it to a document
+    whose structure was never recovered would leave a file with exactly one
+    heading and hide that failure from ``check_pipeline``.
+    """
+    if not annex.strip():
+        return body
+    separator = f"\n\n{_ANNEX_HEADING}\n\n" if headings else "\n\n"
+    return body.rstrip() + separator + annex.strip() + "\n"

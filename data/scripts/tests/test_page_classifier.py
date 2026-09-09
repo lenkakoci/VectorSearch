@@ -30,9 +30,11 @@ Pískovec, s proplástky prachovce, mírně zvětralý, jemně až
 středně zrnitý, šedý a okrově žlutý, kusovitě rozpadavý
 """
 
-# Laboratory form: a caption, then one cell per line.
+# Laboratory form: a caption in whole words, then one cell per line. The caption
+# is what makes this page richer in function words than the borehole log above.
 FORM_PAGE = """STANOVENÍ ZHUTNITELNOSTI
 PROCTOR STANDARD
+Pro hutnění při různých vlhkostech bylo použito téhož vzorku
 Akce:
 Sonda :
 Přirozená vlhkost :

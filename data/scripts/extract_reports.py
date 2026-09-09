@@ -59,6 +59,7 @@ from tenacity import (
 
 from manifest import Manifest, file_sha256, timestamp_key, utc_now
 from markdown_normalizer import MARKDOWN_VERSION, NormalizationStats, normalize_markdown
+from page_classifier import FORM, classify_pages
 from pipeline_common import (
     DATA_DIR,
     EXTRACTED_DIR,
@@ -128,18 +129,24 @@ def pdf_pages(path: Path) -> list[str]:
     return pages
 
 
-def to_markdown(path: Path, pages: list[str]) -> tuple[str, NormalizationStats | None]:
+def to_markdown(
+    path: Path, pages: list[str]
+) -> tuple[str, NormalizationStats | None, list[str]]:
     """Build Markdown for a source file.
 
     Markdown inputs pass through unchanged - they are hand-written and already
     carry headings. PDFs are assembled from ``pages`` and normalised. Returns the
-    Markdown and, for PDFs, what the normaliser changed.
+    Markdown, what the normaliser changed, and the per-page classification.
     """
     if path.suffix.lower() in {".md", ".markdown"}:
-        return path.read_text(encoding="utf-8"), None
+        return path.read_text(encoding="utf-8"), None, []
     if not pages:
-        return "", None
-    return normalize_markdown("\n".join(pages), len(pages))
+        return "", None, []
+    page_kinds = classify_pages(pages)
+    markdown, stats = normalize_markdown(
+        "\n".join(pages), len(pages), pages=pages, page_kinds=page_kinds
+    )
+    return markdown, stats, page_kinds
 
 
 @retry(
@@ -203,7 +210,7 @@ def process_one(
     if needs_markdown:
         logger.info("Converting %s to Markdown", path.name)
         pages = pdf_pages(path)
-        markdown, stats = to_markdown(path, pages)
+        markdown, stats, page_kinds = to_markdown(path, pages)
         if not markdown.strip():
             if pages and not any(page.strip() for page in pages):
                 raise ConversionError(
@@ -213,17 +220,21 @@ def process_one(
             raise ConversionError(f"{path.name}: převod nevrátil žádný text")
         if stats is not None:
             logger.info(
-                "  %d headings (%s) | unwrapped %d table rows | dropped %d furniture, %d contents lines",
+                "  %d headings (%s) | unwrapped %d table rows | dropped %d furniture, %d contents lines"
+                " | %d of %d pages are annex",
                 stats.headings,
                 stats.source,
                 stats.tables_unwrapped,
                 stats.furniture_dropped,
                 stats.toc_lines_dropped,
+                page_kinds.count(FORM),
+                len(page_kinds),
             )
         previous = markdown_path.read_text(encoding="utf-8") if markdown_path.exists() else None
         markdown_path.write_text(markdown, encoding="utf-8")
         if pages:
             _write_page_map(path.stem, pages)
+            _write_page_kinds(path.stem, page_kinds)
         manifest.update(
             key,
             sha256=sha,
@@ -303,6 +314,17 @@ def _write_page_map(stem: str, pages: list[str]) -> None:
     """Persist per-page text so the chunker can attribute page ranges."""
     target = MARKDOWN_DIR / f"{stem}.pages.json"
     target.write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_page_kinds(stem: str, page_kinds: list[str]) -> None:
+    """Persist the per-page classification alongside the page map.
+
+    A separate file rather than a richer page map: ``locate_pages`` reads
+    ``pages.json`` as a plain list of strings, and that contract is what keeps
+    chunk-to-page attribution at 86-98%.
+    """
+    target = MARKDOWN_DIR / f"{stem}.pagekind.json"
+    target.write_text(json.dumps(page_kinds, ensure_ascii=False), encoding="utf-8")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

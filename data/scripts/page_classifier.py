@@ -31,9 +31,9 @@ that borehole log, on the strength of one caption; its short lines give it away.
 Neither measurement works alone.
 
 The thresholds come from the 15 reports converted so far, where they separate
-0-9% form pages in the healthy reports from 23-65% in the broken ones. They are
-tuned to a corpus, not universal, so expect to revisit them when reports from
-another surveyor arrive.
+0.0-8.8% form characters in the ten healthy reports from 28.5-79.5% in the five
+broken ones. They are tuned to a corpus, not universal, so expect to revisit
+them when reports from another surveyor arrive.
 """
 
 from __future__ import annotations
@@ -63,11 +63,16 @@ _MIN_RUN_PAGES = 2
 # stopword share of the very pages this is meant to catch.
 _TOKEN_RE = re.compile(r"[^\W\d_]{2,}", re.UNICODE)
 
+# Verbs, conjunctions, pronouns and adverbs - deliberately no prepositions.
+# A form uses "od", "do", "po", "na" in its field labels as freely as prose does:
+# "od - do:" alone put the 93 borehole-log pages of one report at 6-7%, over the
+# threshold, and they stayed in the body. Without prepositions the same pages
+# measure 0.0-0.6%, because what a form never contains is a verb.
 _STOPWORDS = frozenset(
     """
-    do na od po pro za se si je su jsou jsem jsme jste byl byla bylo byly byt
-    ze ve ke kdy kde ktery ktera ktere kterou kterym kterych nebo ale tak jako
-    pri bez nad pod mezi vsak take jen jeste jiz coz tedy dle podle proto tim
+    se si je jsou jsem jsme jste byl byla bylo byly byt ma maji lze bude budou
+    muze ze kdy kde ktery ktera ktere kterou kterym kterych nebo ale tak jako
+    vsak take jen jeste jiz coz tedy dle podle proto tim pouze zejmena tzv resp
     """.split()
 )
 
