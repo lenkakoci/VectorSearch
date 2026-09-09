@@ -38,6 +38,14 @@ import tiktoken
 # chunk and would make chunk tuning slow and expensive.
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 
+# Cache-invalidation key for the chunking *logic*, the counterpart of
+# MARKDOWN_VERSION. The manifest already invalidates on the four tunable
+# parameters, but a change to how this module splits, windows or merges leaves
+# those untouched, so without this the database keeps chunks from the previous
+# algorithm and the manifest reports them as current. Bump on any behavioural
+# change here.
+CHUNKER_VERSION = 1
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
 

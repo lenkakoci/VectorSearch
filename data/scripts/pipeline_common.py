@@ -10,6 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from chunker import CHUNKER_VERSION
 from manifest import PipelineConfig, chunk_params_hash
 from markdown_normalizer import MARKDOWN_VERSION
 from schemas import SCHEMA_VERSION
@@ -72,6 +73,7 @@ class Settings:
                 self.chunk_overlap_tokens,
                 self.chunk_min_tokens,
                 self.contextualize,
+                CHUNKER_VERSION,
             ),
         )
 

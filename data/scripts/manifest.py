@@ -47,12 +47,24 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def chunk_params_hash(max_tokens: int, overlap: int, min_tokens: int, contextualize: bool) -> str:
+def chunk_params_hash(
+    max_tokens: int,
+    overlap: int,
+    min_tokens: int,
+    contextualize: bool,
+    chunker_version: int,
+) -> str:
     """Return a short stable hash of the chunker configuration.
 
     Any change here invalidates chunking and everything downstream.
+
+    ``chunker_version`` covers the algorithm itself. The four tunable parameters
+    alone cannot see a change to how the module splits, windows or merges, so
+    without it a rewritten chunker leaves the database holding chunks of the
+    previous algorithm while the manifest calls them current - the same failure
+    ``markdown_version`` prevents one stage earlier.
     """
-    payload = f"{max_tokens}|{overlap}|{min_tokens}|{int(contextualize)}"
+    payload = f"{max_tokens}|{overlap}|{min_tokens}|{int(contextualize)}|v{chunker_version}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
