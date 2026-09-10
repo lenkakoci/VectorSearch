@@ -44,7 +44,7 @@ _ENCODING = tiktoken.get_encoding("cl100k_base")
 # those untouched, so without this the database keeps chunks from the previous
 # algorithm and the manifest reports them as current. Bump on any behavioural
 # change here.
-CHUNKER_VERSION = 3
+CHUNKER_VERSION = 4
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
