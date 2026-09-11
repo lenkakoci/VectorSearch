@@ -102,6 +102,21 @@ class ConversionError(RuntimeError):
     """
 
 
+class MissingTextLayer(ConversionError):
+    """A source PDF is a scan: its pages hold no characters at all.
+
+    Separate from a failure because nothing in this pipeline can act on it. The
+    answer is OCR, outside the pipeline, and until that happens the file will
+    report the same thing on every run. Counting it as a failure made
+    ``ingest.py`` stop before chunking, so three un-OCRed scans sitting in the
+    corpus meant a full run could never reach the paid stages at all - every
+    ingest had to name its documents with --only to get past them.
+
+    It is still reported: the run says how many were skipped and why, and
+    ``check_pipeline`` lists them under CHYBÍ OCR VRSTVA in --triage.
+    """
+
+
 def pdf_pages(path: Path) -> list[str]:
     """Return the text of a PDF, one string per page.
 
@@ -213,7 +228,7 @@ def process_one(
         markdown, stats, page_kinds = to_markdown(path, pages)
         if not markdown.strip():
             if pages and not any(page.strip() for page in pages):
-                raise ConversionError(
+                raise MissingTextLayer(
                     f"{path.name}: chybí OCR vrstva - {len(pages)} stran neobsahuje žádný text. "
                     "Nechat PDF projít OCR a nahrát znovu."
                 )
@@ -393,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
         client, model = build_client()
 
     processed = 0
+    skipped = 0
     failed = 0
     for path in sources:
         try:
@@ -405,6 +421,11 @@ def main(argv: list[str] | None = None) -> int:
                 force=args.force,
             ):
                 processed += 1
+        except MissingTextLayer as exc:
+            # A known, permanent state of the source file, not a fault in this
+            # run. Reported and stepped over so the rest of the corpus proceeds.
+            skipped += 1
+            logger.warning("%s", exc)
         except ConversionError as exc:
             # Expected and explained, so no traceback - but still a failure.
             failed += 1
@@ -416,7 +437,11 @@ def main(argv: list[str] | None = None) -> int:
             manifest.save()
 
     logger.info(
-        "Extraction done: %d processed, %d failed, %d total", processed, failed, len(sources)
+        "Extraction done: %d processed, %d skipped (chybí OCR), %d failed, %d total",
+        processed,
+        skipped,
+        failed,
+        len(sources),
     )
     return 1 if failed else 0
 
