@@ -159,7 +159,145 @@ reálných posudků.
 **`document_chunks`** — jeden řádek na chunk. `embedding vector(1536)` s HNSW
 indexem pro cosine similarity, `fts_chunk tsvector` s GIN indexem pro full-text.
 Citační jednotkou je `section` (cesta Markdown nadpisů), `page_from`/`page_to`
-jsou best-effort a mohou být `NULL`.
+jsou best-effort a mohou být `NULL`. `content_kind` je `prose` nebo `annex`;
+přílohové chunky mají `embedding IS NULL` a jsou dohledatelné jen fulltextem.
+
+## Jak vzniká struktura
+
+PDF extraktor vrací holý text bez písem a stylů, takže **nadpis od odstavce
+nepozná**. Bez rekonstrukce by byl posudek jeden blok, chunker by spadl na jednu
+bezejmennou sekci a každý chunk by přišel o citaci. Tahle kapitola popisuje, jak
+se struktura skládá zpátky — a kde to může selhat.
+
+Všechno tady běží **bez API a bez databáze**, takže se to dá ladit zdarma:
+
+```powershell
+uv run python extract_reports.py --markdown-only   # převod a normalizace
+uv run python check_pipeline.py --no-db --triage   # co potřebuje rozhodnutí
+uv run python check_pipeline.py --removed          # co se smazalo a proč
+uv run python chunk_and_embed.py --dry-run         # chunky bez embeddingů
+```
+
+### 1. Klasifikace stránek
+
+[page_classifier.py](data/scripts/page_classifier.py) označí každou stranu jako
+`prose`, `form` nebo `empty` ze dvou čísel:
+
+| signál | co měří | práh |
+| --- | --- | ---: |
+| podíl dlouhých řádků | souvislý text se láme až na okraji (≥ 45 znaků), buňka formuláře má dvě slova | < 12 % |
+| podíl funkčních slov | česká věta se neobejde bez `je`, `se`, `byl`, `nebo`; tabulka je nemá | < 6 % |
+
+**Formulář je jen strana, kde jsou nízko obě.** Ta konjunkce je celá pointa:
+vrtné protokoly mají funkčních slov ~1 %, méně než laboratorní formuláře, ale
+jejich litologické popisy jsou souvislé věty, takže je zachrání dlouhé řádky.
+Pravidlo na slovech samotné by zahodilo přesně to, co lidi hledají.
+
+Do seznamu **nepatří předložky**. `od`, `do`, `po`, `na` používá formulář
+v popiscích stejně jako próza — samotné `od - do:` drželo 93 vrtných protokolů
+nad prahem. Co formulář nemá, je sloveso.
+
+Doplňková pravidla: běh kratší než 2 strany se pohltí okolím (tabulka uvnitř
+kapitoly patří ke kapitole), prázdné strany běh nepřerušují (sken uprostřed
+přílohy ji nerozdělí) a **úvodní běh až 3 stran je obálka, ne příloha** —
+titulní strana je krátkořádková a beze sloves, takže se jinak měří jako formulář.
+
+Výsledek jde do `processed/markdown/<stem>.pagekind.json`, pozičně shodného
+s `pages.json`. Zvlášť schválně: `locate_pages()` čte `pages.json` jako holý
+seznam řetězců a na tom kontraktu stojí dohledání stránek.
+
+### 2. Normalizér — pravidla v pořadí
+
+[markdown_normalizer.py](data/scripts/markdown_normalizer.py), kroky jsou
+závislé na pořadí:
+
+1. **Odsazení přílohy.** Formulářové strany a všechno za hranicí přílohy se
+   odloží stranou a připojí na konec pod `## Přílohy`. Teprve pak běží zbytek —
+   práh na záhlaví i pojistka ztráty tak vidí jen tělo zprávy, na což byly
+   kalibrované.
+2. **Rozbalení layoutových tabulek.** Blok `|`-řádků s méně než 60 % vyplněných
+   buněk je sloupcový layout, ne data.
+3. **Mazání záhlaví a patiček.** Řádek do 160 znaků opakovaný na **polovině
+   stran** (minimálně 3×) je paginace. Signatura musí obsahovat **slovo o třech
+   písmenech** — jinak by se mazaly laboratorní hodnoty jako `<0,` nebo `207.`
+4. **Vytažení obsahu.** Položka je `číslo … tečky … strana` (≥ 4 tečky),
+   potřeba jsou aspoň 3. Položky dál než 40 řádků od sebe tvoří **samostatné
+   bloky** a každý se maže zvlášť.
+5. **Povýšení nadpisů** podle obsahu: `1.` → `##`, `1.1` → `###`, hloubka max 4.
+   Párování je fuzzy (85 % podobnosti), protože extraktor vynechává glyfy.
+   Doplňkově se dohledají čísla oddělená od názvu a podsekce, které mělký obsah
+   nelistuje (podle rodiče, rozsahu a pořadí mezi sourozenci).
+6. **Titulek dokumentu.** Odmítne se osoba, firma, adresa, kontakt a položka
+   seznamu; z toho, co zbude, vyhraje řádek pojmenovávající druh zprávy. **Když
+   žádný takový není, nepovýší se nic** — špatný titulek je horší než žádný,
+   protože stojí v kořeni každé citace.
+7. **Pojistka ztráty.** Když by normalizace zahodila víc než **25 %** písmen
+   a číslic, zopakuje se **bez mazání záhlaví**; teprve pak se vrátí surový text.
+
+### 3. Hranice přílohy
+
+Formulářové strany nejsou celá příloha. Vrtné protokoly jsou próza podle všech
+měřítek, ale leží za poslední kapitolou — a bez hranice zdědí její nadpis.
+
+> **Hranice = první formulářová strana za poslední stranou, která nese číslovaný
+> nadpis uvedený v obsahu.**
+
+Požadavek „uvedený v obsahu" je nutný: bez něj se za nadpis počítá věta
+začínající číslem (*„4 EO (ekvivalentní obyvatele) z každé projektované
+stavby RD"*) a hranice přeskočí přílohu celou.
+
+Pravidlo drží pro běžný posudek (příloha následuje po poslední kapitole)
+i pro **svazek** více zpráv v jednom PDF, kde dílčí zprávy číslují až do konce
+a hranice proto padne pozdě, místo aby jejich strukturu spolkla.
+
+### 4. Chunker
+
+[chunker.py](data/scripts/chunker.py) je čistá funkce — žádné API, žádná
+databáze, testovatelná bez přihlašovacích údajů.
+
+1. **Dělení podle nadpisů.** Cesta nadpisů (`Kapitola > Podkapitola`) se stane
+   `section` a je citační jednotkou.
+2. **Okna přes velké sekce.** Nad `CHUNK_MAX_TOKENS` (800) se sekce dělí
+   přednostně na hranicích odstavců, s překryvem `CHUNK_OVERLAP_TOKENS` (100).
+   Když je překryv celých odstavců nedosažitelný, uřízne se **konec posledního
+   odstavce** — dřív v takovém případě nevznikl překryv žádný.
+3. **Nadpis do každého okna**, ne jen do prvního. `fts_chunk` se staví
+   z `chunk_raw`, takže jinak nešlo najít pokračování dlouhé sekce podle názvu.
+4. **Slučování malých sekcí jen uvnitř stejné sekce.** Slučování přes hranici
+   nadpisu dřív nechávalo popisek toho předchozího, takže malá sekce byla
+   citována jako ta nad ní.
+5. **Limit se vynucuje** po spojení, ne po odstavcích — separátory se dřív
+   nepočítaly a chunky limit přerůstaly.
+
+### 5. `content_kind` — popisek zvlášť, cena zvlášť
+
+Dvě nezávislé otázky se dvěma nezávislými zdroji:
+
+| otázka | rozhoduje | kde |
+| --- | --- | --- |
+| Jak to citovat? | **pozice** v dokumentu | normalizér vloží `## Přílohy` |
+| Platit za embedding? | **typ stránky** | `content_kind` z `pagekind.json` |
+
+Proto mají vrtné popisy citaci `… > Přílohy` (pravdivou) **a zároveň vektor**
+(protože jsou to prózou). Kdyby obojí viselo na jednom signálu, jedno by se
+ztratilo. Chunk, jehož stránku se nepodařilo dohledat (~4 %), se počítá jako
+próza — nedohledaná strana stojí embedding navíc, ale nevyrobí díru v indexu.
+
+### 6. Záludnosti — kde to může klasifikovat nebo nachunkovat špatně
+
+| co | proč se to stane | jak se to projeví | co s tím |
+| --- | --- | --- | --- |
+| **Prahy jsou naladěné na 15 posudků** | 12 % / 6 % dělí tenhle korpus čistě (zdravé 0–8,8 %, problémové 28,5–79,5 %), ne korpus obecně | posudek od jiného zpracovatele může mít prózu označenou jako formulář nebo naopak | `check_pipeline --triage`, sloupec „přílohy"; prahy jsou konstanty v `page_classifier.py` |
+| **Titulní strana vypadá jako formulář** | krátké řádky, žádná slovesa | obálka spadne do přílohy a odnese s sebou dobrý titulek | ošetřeno pravidlem „úvodní běh do 3 stran je obálka" — **delší obálka ho obejde** |
+| **Vrtný protokol je hraniční případ** | funkčních slov ~1 %, drží ho jen dlouhé řádky | při zpřísnění prahu dlouhých řádků zmizí nejcennější text z vektorů | před změnou prahu ověřit dokument s `DOKUMENTACE SONDY` |
+| **Svazek více zpráv v jednom PDF** | `outline` slučuje všechny obsahy do jednoho (první název pro dané číslo vyhraje) | z 51 položek zbude 9 na 265 stran; nadpis dílčí zprávy přistane uvnitř přílohy | známé, neřešené — rozpad svazků je samostatný úkol |
+| **Práh na záhlaví škáluje s počtem stran** | `polovina stran`, ale opakování pochází z přílohy | stejná příloha smaže 12 000 řádků u dlouhého dokumentu a nic u krátkého | ošetřeno odsazením přílohy před měřením |
+| **Pojistka ztráty je pořád schod** | při překročení se zahodí celá normalizace včetně správně nalezených nadpisů | dokument bez jediného nadpisu a se všemi chunky bez citace | odstupňováno (zopakuje se bez mazání záhlaví), ale druhá úroveň zůstává vše-nebo-nic |
+| **Příloha bez jediné formulářové strany** | hranice se hledá jako *formulářová* strana za posledním nadpisem | prozaická příloha zdědí poslední kapitolu (`6.1 SEZNAM NOREM`) | známé, neřešené |
+| **`tiktoken` počítá češtinu níž než Gemini** | jiný tokenizér, rozdíl 10–30 % | chunk může být u modelu větší, než se změřilo | cíl 800 proti limitu 2048 to pokrývá; při zvyšování `CHUNK_MAX_TOKENS` pozor |
+| **Prefix `KONTEXT:` se nezapočítává** | přidává ~250 tokenů, ale `token_count` měří text bez něj | skutečný vstup do modelu je větší, než říká sloupec | varování při > 1500 tokenech; při ladění velikosti počítat s rezervou |
+| **Malé sekce zůstávají malé** | slučuje se jen uvnitř stejné sekce | chunky o 32 tokenech | záměr — správný popisek je cennější než velikost; `check_pipeline` to hlásí |
+| **Nedohledaná stránka** | `locate_pages` porovnává prvních 60 znaků proti textu strany | ~4 % chunků bez čísla strany, počítají se jako próza | citace bez strany, embedding navíc |
 
 ## Vyhledávání
 
@@ -252,11 +390,55 @@ co fungovalo dřív, jen přibývá skloňování.
 ## Stav
 
 Infrastruktura, chunking, embedding, import i vyhledávání jsou hotové a ověřené.
+V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez vektoru
+(dohledatelných fulltextem). Tři zdroje čekají na OCR a do korpusu se nedostaly.
 
-Extrakční schéma v `data/scripts/schemas.py` je **provizorní** — vzniklo dřív, než
-byly k dispozici reálné posudky. `report_type` je volný text, ne `Literal`, a pole
-`extra_fields` sbírá vše, co schéma nepokrývá. Postup, jak z reálných posudků
-odvodit finální schéma, je v `.claude/skills/data-ingestion/SKILL.md`.
+### Otevřené věci
+
+| věc | stav | proč se to nechalo |
+| --- | --- | --- |
+| **Tři skeny bez OCR** | mimo korpus | OCR je krok mimo pipeline; na stroji není `ocrmypdf` ani `tesseract`. Běh je ohlásí jako `skipped` a pokračuje dál |
+| **Svazky více zpráv v jednom PDF** | Sedmirohé (11 zpráv) a Metan jih (5) mají běh chunků pod `8. Závěr > 3.2. Podzemní vody` | správné řešení je rozpad na samostatné dokumenty, což se dotýká identity dokumentu, extrakce i citací |
+| **Prozaická příloha bez formulářových stran** | ZZ_Pazderna: 34 chunků pod `6.1 SEZNAM NOREM` | hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat |
+| **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
+| **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
+| **Kvalita vyhledávání se neměří** | žádná sada zlatých dotazů, žádné nDCG | `check_pipeline` ověřuje artefakty, ne relevanci |
+| **Reranker a rozšíření o sousedy** | nenasazeno | `chunk_index` a `UNIQUE (document_id, chunk_index)` to umožňují triviálně; má smysl až po opravě sekcí |
+
+### Na co si dát pozor
+
+**Verze jsou slib.** `MARKDOWN_VERSION`, `SCHEMA_VERSION` a `CHUNKER_VERSION`
+znamenají „stejná verze = stejný výstup". Když změníš logiku normalizéru nebo
+chunkeru a verzi nezvedneš, manifest nechá v databázi staré chunky a označí je za
+aktuální — tichá nekonzistence, kterou nic nenahlásí. Stalo se to při vývoji
+`content_kind`: dva dokumenty si nechaly chunky ze staré logiky.
+
+**Návratový kód nestačí.** Průchod skončí s kódem 0 i tehdy, když část výsledku
+neodpovídá kódu, který ho vyrobil. Ověřuj přepočtem: načti Markdown, spočítej
+chunky znovu a porovnej s parquetem a s databází.
+
+**Ověřuj po každé dávce, ne až na konci.** Embeddingy se platí. Dvě opravy
+(dohledání stránek, `content_kind`) vyšly najevo až při kontrole a znamenaly
+přepočet — kdyby dávky běžely za sebou bez ověření, platily by se vícekrát.
+
+**Diakritika se přes shell nepřenese.** Seznam dokumentů předaný jako argument
+se rozbije na `Orli?ky`. Volej `ingest.main([...])` z Pythonu se jmény načtenými
+z manifestu.
+
+**Migrace nesmí mazat.** SQL v `data/scripts/sql/` musí být opakovaně
+spustitelné: `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, nikdy
+`DROP`. Databáze obsahuje reálné dokumenty.
+
+**Obraz PostgreSQL není standardní.** Staví se z `postgres/Dockerfile` a nese
+český hunspell slovník. Bez `docker compose build postgres` se české skloňování
+tiše rozbije (`text search configuration "czech" does not exist`).
+
+**Port 5432 je publikovaný**, takže naráz může běžet jen jeden projekt
+s PostgreSQL. `name: vectorsearch` v compose souboru neodstraňuj — bez něj si
+Compose odvodí jméno z adresáře a recykluje kontejnery cizího projektu.
+
+**Bind mount `deploy/local/data/postgres` drží data.** Nikdy ho nemaž
+a nepouštěj `docker compose down -v` ani `--remove-orphans` bez rozmyslu.
 
 ## Bezpečnost
 
