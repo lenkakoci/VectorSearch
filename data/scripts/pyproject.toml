@@ -27,6 +27,8 @@ dev = [
     "pytest>=9.1.1",
     # TestClient for the API tests.
     "httpx>=0.28.0",
+    # Golden-set questions for eval_retrieval.py.
+    "pyyaml>=6.0",
 ]
 # The HTTP API for the web demo (search_api.py). Installed by default so that
 # `uv run uvicorn search_api:app` works without extra flags; the pipeline

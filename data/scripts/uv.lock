@@ -387,6 +387,7 @@ api = [
 dev = [
     { name = "httpx" },
     { name = "pytest" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
@@ -411,6 +412,7 @@ api = [
 dev = [
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [[package]]

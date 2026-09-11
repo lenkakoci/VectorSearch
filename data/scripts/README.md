@@ -46,6 +46,8 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `search_reports.py` | Vector, full-text and hybrid (RRF) search from the CLI. Argument parsing and printing only. |
 | `search_service.py` | The search itself as a library: SQL for every branch, query embedding with a cache, RRF with per-branch ranks, `ts_headline` highlights, neighbours, facets. Takes a connection, returns dicts. |
 | `search_api.py` | FastAPI over the service for the web demo (`frontend/`). Pydantic models, no search logic. Dependency group `api`, installed by default. |
+| `text_match.py` | Loose text comparison (case, doubled spaces, kinds of dash) for golden-set evidence and later for quotes in answers. No API, no database. |
+| `eval_retrieval.py` | Recall@k and MRR per search mode over `../eval/golden.yaml`. `--check` verifies the set against the database for free. |
 
 ## Flags worth knowing
 
@@ -69,6 +71,27 @@ uv run python search_reports.py --list --obec Lednice
 
 `--only` takes the stem, the file name or a path in every script (`Roudno`,
 `Roudno.pdf`, `PDFs/Roudno.pdf`).
+
+## Measuring retrieval
+
+`../eval/golden.yaml` holds 40 Czech questions, each with the document and a
+verbatim snippet of the chunk that answers it; six have no answer in the
+corpus. `eval_retrieval.py` runs them through `fts`, `vector` and `hybrid` and
+reports recall@5/10/40 and MRR, per question type, the rank of the first
+relevant chunk per question, and what each mode still returns for the
+unanswerable ones. JSON goes to `../processed/eval/`.
+
+```powershell
+uv run python eval_retrieval.py --check          # verify the set against the database; free
+uv run python eval_retrieval.py                  # one query embedding per question
+uv run python eval_retrieval.py --modes fts      # no API call
+uv run python eval_retrieval.py --only opatov-gt4c --no-save
+```
+
+Relevance is decided by text, not chunk id - `text_match.py` ignores case,
+doubled spaces and the kind of dash - so the set survives re-chunking. After
+changing the corpus or the set, run `--check` first: a snippet that matches
+nothing would otherwise count as a silent miss.
 
 ## Incrementality
 

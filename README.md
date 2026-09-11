@@ -92,6 +92,7 @@ Přegenerovat se dá přes `extract_reports.py --markdown-only --force --only <s
 | `data/PDFs/` | Vstupní posudky — **negitované**, interní dokumenty |
 | `data/samples/` | Testovací fixture pro ověření pipeline |
 | `data/processed/` | Reprodukovatelná cache (Markdown, JSON, parquet, manifest) |
+| `data/eval/` | Zlatá sada otázek pro měření vyhledávání |
 | `data/scripts/` | Pipeline skripty (uv-managed), vyhledávací služba a její API |
 | `frontend/` | Webové demo vyhledávání (React + Vite + Tailwind) |
 | `CLAUDE.md`, `.claude/skills/` | Konfigurace pro Claude Code |
@@ -111,6 +112,7 @@ Spouštět z `data/scripts`.
 | `search_reports.py` | Vyhledávání z příkazové řádky |
 | `search_service.py` | Vyhledávací logika jako knihovna (SQL, embedding, RRF, kontext, facety); volá ji CLI i API |
 | `search_api.py` | FastAPI nad službou pro webové demo (`uv run uvicorn search_api:app --port 8010`) |
+| `eval_retrieval.py` | Měření kvality vyhledávání nad zlatou sadou: recall@k a MRR pro každý režim |
 
 Užitečné přepínače:
 
@@ -440,6 +442,29 @@ API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
 Testy: `uv run pytest` v `data/scripts` (filtry, fúze, API bez databáze),
 `npm test` ve `frontend` (render nad odpovědí zachycenou z API).
 
+## Měření kvality vyhledávání
+
+`data/eval/golden.yaml` obsahuje 40 českých otázek. U každé je dokument
+a doslovný výňatek chunku, který na ni odpovídá. Otázky pokrývají skloňování,
+přesné kódy a označení, parafráze, odpovědi ve více dokumentech a fakta jen
+v přílohách. Šest otázek odpověď v korpusu nemá.
+
+```powershell
+uv run python eval_retrieval.py --check                    # ověří sadu proti databázi, zdarma
+uv run python eval_retrieval.py                            # jeden embedding na otázku
+uv run python eval_retrieval.py --modes fts --type annex   # bez volání API
+```
+
+Výstupem je recall@5, @10, @40 a MRR pro fulltext, vektor a hybrid, rozpad
+podle typu otázky, pořadí prvního relevantního chunku u každé otázky a přehled
+toho, co vyhledávání vrací na otázky bez odpovědi. JSON se ukládá do
+`data/processed/eval/`.
+
+Relevance se určuje podle textu ([text_match.py](data/scripts/text_match.py)
+ignoruje velikost písmen, zdvojené mezery a druh pomlčky), ne podle chunk_id,
+takže sada přežije přechunkování. Po změně korpusu nebo sady nejdřív spusť
+`--check`: výňatek, který nic nenajde, by se jinak tiše počítal jako nenalezený.
+
 ## Český fulltext
 
 PostgreSQL nemá český stemmer, takže konfigurace `simple` neuměla skloňování —
@@ -472,7 +497,7 @@ V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez 
 | **Prozaická příloha bez formulářových stran** | ZZ_Pazderna: 34 chunků pod `6.1 SEZNAM NOREM` | hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat |
 | **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
-| **Kvalita vyhledávání se neměří** | žádná sada zlatých dotazů, žádné nDCG | `check_pipeline` ověřuje artefakty, ne relevanci |
+| **Fulltext a otázky v přirozeném jazyce** | ve zlaté sadě našel v top 40 odpověď jen u 3 z 34 otázek | `websearch_to_tsquery` vyžaduje všechna slova dotazu. Hybrid je proto téměř totéž co vektor a fakta z příloh, dosažitelná jen fulltextem, se nenajdou. Před rerankingem je potřeba volnější dotaz pro kandidáty |
 | **Reranker** | nenasazeno | sousední chunky už vrací API (`/api/chunks/…/context`) a UI („Kontext ±1"); reranker má smysl až po opravě sekcí |
 
 ### Na co si dát pozor

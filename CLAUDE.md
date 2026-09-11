@@ -182,14 +182,23 @@ aggregate `extra_fields` and `missing_fields` in SQL, edit `schemas.py`, bump
 Re-extraction reads cached Markdown, so no PDF is re-parsed - but every document
 is extracted again, which is paid.
 
-**2. Measure search quality.** Nothing measures relevance today:
-`check_pipeline.py` verifies artefacts, and "is this chunking better" has been
-answered by inspecting section labels. Build a small golden set - realistic
-queries in Czech, each with the document and section that should answer it,
-including morphology cases ("vrty" vs "vrtů") and annex-only facts (a borehole
-number) - and report recall@k / MRR per search mode. Worth doing *before* the
-next retrieval change (reranker, parent-child expansion), or its effect will be
-guessed again. The query embedding is the only cost.
+**2. Measure search quality.** In place for retrieval. `data/eval/golden.yaml`
+holds 40 Czech questions - morphology, exact codes, paraphrase, several
+documents, annex-only facts and six with no answer in the corpus - each with the
+document and a verbatim snippet of the chunk that answers it.
+`eval_retrieval.py` reports recall@k and MRR per search mode; `--check` verifies
+the set against the database for free. Relevance is matched by text
+(`text_match.py`), not chunk id, so re-chunking does not invalidate the set.
+Run it before and after every retrieval change (the reranker is next), or its
+effect will be guessed again. Answer quality - faithfulness, correct refusal -
+is not measured yet; it arrives with generation.
+
+The first run (2026-09-11) found that full text answers almost nothing asked
+as a question: 3 of 34 in its top 40. `websearch_to_tsquery` ANDs every term,
+so a natural-language question rarely has all its words in one chunk. Hybrid
+is therefore close to vector alone, and annex facts - reachable only by full
+text, because annex chunks carry no vector - go unfound. A looser full-text
+query for candidate generation belongs in front of the reranker.
 
 **3. Split bundles into their sub-reports.** Largest open structural issue.
 `GF_P188240_ZZ Sedmirohé 10 sond` is eleven reports under one cover (sub-report

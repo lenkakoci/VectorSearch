@@ -1,0 +1,309 @@
+# Zlatá sada otázek pro měření vyhledávání (data/scripts/eval_retrieval.py).
+#
+# Každá otázka říká, kde v korpusu je odpověď: dokument (stem zdrojového
+# souboru) a doslovný výňatek, který relevantní chunk obsahuje. Relevance se tak
+# neurčuje podle chunk_id a sada přežije přechunkování.
+#
+#   contains: [a, b]   stačí kterýkoli výňatek
+#   evidence: [x, y]   odpověď je na více místech; recall počítá, kolik jich
+#                      vyhledávání našlo
+#
+# Porovnání ignoruje velikost písmen, zdvojené mezery a druh pomlčky
+# (text_match.py). Diakritika, čísla a jednotky se musí shodovat.
+#
+# Typy otázek:
+#   morphology  jiný tvar slova než v textu (vrty × vrtů)
+#   exact       kódy, označení vrtů a sond, normy
+#   paraphrase  stejný význam jinými slovy
+#   multi       odpověď ve více dokumentech
+#   annex       odpověď v přílohách (tabulky, protokoly), které nemají vektor
+#   negative    korpus odpověď nemá; vyhledávání přesto něco vrátí
+#
+# Výňatky jsou ověřené proti databázi. Po změně sady nebo korpusu spusťte
+# zdarma:   uv run python eval_retrieval.py --check
+version: 1
+questions:
+  # --- stejný význam jinými slovy -------------------------------------------
+  - id: lednice-hladina
+    type: paraphrase
+    question: "Jak blízko pod povrchem je podzemní voda v Lednici?"
+    evidence:
+      - doc: "průzkum-Lednice"
+        contains: "ustálená se vyskytovala v rozmezí od 0,4 – 1,0 m"
+
+  - id: orlicky-radon
+    type: paraphrase
+    question: "Kolik radonu obsahuje voda z vrtu v Orličkách?"
+    evidence:
+      - doc: "GF_P187427_2023 0542_Orličky 239"
+        contains: ["koncentrace 287 Bq/l", "objemová aktivita radonu 222"]
+
+  - id: opatov-vsakovani
+    type: paraphrase
+    question: "Dá se na Novém Opatově likvidovat dešťová voda vsakováním?"
+    evidence:
+      - doc: "Predbezny IG a HG pruzkum Novy Opatov 2018"
+        contains: ["kv = 9,22.10-8", "pro vsakování nevhodné"]
+
+  - id: myslinka-agresivita
+    type: paraphrase
+    question: "Jak moc podzemní voda v Myslince napadá beton?"
+    evidence:
+      - doc: "IG a HG pruzkum Myslinka 2018"
+        contains: "klasifikační stupeň XA2"
+
+  - id: mricna-studny
+    type: paraphrase
+    question: "Ovlivní čerpání z nového vrtu v Mříčné sousední studny?"
+    evidence:
+      - doc: "GF_P185443_Mricna ppc2st - pruzkumny HG vrt - zaverecna zprava"
+        contains: "dosah depresního kužele"
+
+  - id: orlicky-mikrobiologie
+    type: paraphrase
+    question: "Je voda z vrtu v Orličkách pitná z mikrobiologického hlediska?"
+    evidence:
+      - doc: "GF_P187427_2023 0542_Orličky 239"
+        contains: "Mikrobiologicky je voda závadná"
+
+  - id: monitoring-srazky
+    type: paraphrase
+    question: "Kolik napršelo v hydrologickém roce 2023 v areálu v Mladé Boleslavi?"
+    evidence:
+      - doc: "GF_P188407_DZ_Monitoring_10_2023"
+        contains: "589,3 mm"
+
+  - id: dolnilhota-radon
+    type: paraphrase
+    question: "Jaký je radonový index pozemku pro výrobní halu v Dolní Lhotě?"
+    evidence:
+      - doc: "sample_posudek"
+        contains: "Radonový index pozemku byl stanoven jako střední"
+
+  - id: zabreh-namesti
+    type: paraphrase
+    question: "Proč nelze na Masarykově náměstí v Zábřehu vsakovat srážkovou vodu?"
+    evidence:
+      - doc: "Zábřeh na Moravě"
+        contains: "3,38.10-9"
+
+  - id: kubice-zemina
+    type: paraphrase
+    question: "Stačí zemina ze zářezů na stavbu násypů u České Kubice?"
+    evidence:
+      - doc: "_zz_I_26_Ceska_Kubice_PoGTP"
+        contains: "v zářezech je nedostatečný"
+
+  - id: libstat-hladina
+    type: paraphrase
+    question: "V jaké hloubce se ustálila voda v novém vrtu v Libštátu?"
+    evidence:
+      - doc: "GF_P185444_Libstat ppc979-3 - pruzkumny HG vrt - zaverecna zprava"
+        contains: "ustálila v hloubce 16,2 m"
+
+  # --- jiný tvar slova --------------------------------------------------------
+  - id: roudno-vrty-tc
+    type: morphology
+    question: "vrty pro tepelné čerpadlo v Roudně"
+    evidence:
+      - doc: "Roudno"
+        contains: ["12 ks hlubokých vrtů", "12 ks vrtů"]
+
+  - id: pazderna-vsak
+    type: morphology
+    question: "koeficienty vsaku štěrků v Pazderně"
+    evidence:
+      - doc: "ZZ_Pazderna - IGP, HGP_final"
+        contains: "koeficient vsaku těchto zemin"
+
+  - id: lednice-sesuvy
+    type: morphology
+    question: "sesuvy a poddolování v Lednici"
+    evidence:
+      - doc: "průzkum-Lednice"
+        contains: "nejsou evidovány sesuvy ani poddolování"
+
+  - id: roudno-prazdneni
+    type: morphology
+    question: "doba prázdnění vsakovacích objektů v Roudně"
+    evidence:
+      - doc: "Roudno"
+        contains: ["doba prázdnění 79,1 h", "Tpr = 79,1 hod"]
+
+  - id: opatov-zlom
+    type: morphology
+    question: "závistský přesmyk na Novém Opatově"
+    evidence:
+      - doc: "Predbezny IG a HG pruzkum Novy Opatov 2018"
+        contains: ["závistský přesmyk", "závistského přesmyku"]
+
+  # --- kódy, označení, normy --------------------------------------------------
+  - id: csn-759010
+    type: exact
+    question: "ČSN 75 9010"
+    evidence:
+      - doc: "Roudno"
+        contains: "ČSN 75 9010"
+      - doc: "Zábřeh na Moravě"
+        contains: "ČSN 75 9010"
+      - doc: "IG a HG pruzkum Myslinka 2018"
+        contains: "ČSN 75 9010"
+      - doc: "Predbezny IG a HG pruzkum Novy Opatov 2018"
+        contains: "ČSN 75 9010"
+      - doc: "ZZ_Pazderna - IGP, HGP_final"
+        contains: "ČSN 75 9010"
+
+  - id: hv106-hloubka
+    type: exact
+    question: "Do jaké hloubky byl odvrtán vrt HV-106/2?"
+    evidence:
+      - doc: "GF_P185441_Stav ppc106-2 - pruzkumny HG vrt - zaverecna zprava"
+        contains: "do hloubky 42 m"
+
+  - id: hv106-povodi
+    type: exact
+    question: "Ve kterém povodí leží vrt HV-106/2?"
+    evidence:
+      - doc: "GF_P185441_Stav ppc106-2 - pruzkumny HG vrt - zaverecna zprava"
+        contains: ["1-04-02-014", "Úlibický potok"]
+
+  - id: monitoring-chrom
+    type: exact
+    question: "Jaká je nejvyšší zaznamenaná koncentrace chromu ve vrtu PJ02-102?"
+    evidence:
+      - doc: "GF_P188407_DZ_Monitoring_10_2023"
+        contains: "dosud zaznamenaná maximum (525"
+
+  - id: monitoring-benzen
+    type: exact
+    question: "koncentrace benzenu ve vrtu HV1 v říjnu 2023"
+    evidence:
+      - doc: "GF_P188407_DZ_Monitoring_10_2023"
+        contains: "stouply na 2 215"
+
+  - id: kubice-xa3
+    type: exact
+    question: "agresivita XA3 podzemní vody u České Kubice"
+    evidence:
+      - doc: "_zz_I_26_Ceska_Kubice_PoGTP"
+        contains: ["na beton XA3", "na úrovní XA3"]
+
+  - id: libstat-vydatnost
+    type: exact
+    question: "Jaká je využitelná vydatnost vrtu HV-979/3?"
+    evidence:
+      - doc: "GF_P185444_Libstat ppc979-3 - pruzkumny HG vrt - zaverecna zprava"
+        contains: "Qvyuž = 0,2 l/s = 12,0 l/min"
+
+  - id: hv263-cerpaci
+    type: exact
+    question: "Jakou vydatností se čerpalo při čerpací zkoušce na vrtu HV-263/3?"
+    evidence:
+      - doc: "GF_P185442_Lhota Komarov - pruzkumny HG vrt - zaverecna zprava"
+        contains: "Čerpání bylo prováděno s vydatností 0,25 l/s"
+
+  - id: va145-nel
+    type: exact
+    question: "nejvyšší koncentrace NEL u sondy VA145"
+    evidence:
+      - doc: "GF_P188240_ZZ Sedmirohé 10 sond"
+        contains: "9 800 mg NEL"
+
+  - id: metan-pv58
+    type: exact
+    question: "Ve kterém vrtu bylo v lokalitě Metan jih zjištěno nejvyšší ropné znečištění?"
+    evidence:
+      - doc: "GF_P188241_ZZ Metan jih 4 sondy"
+        contains: "6 000 mg NEL"
+
+  - id: sample-v3
+    type: exact
+    question: "Co bylo zjištěno ve vrtu V-3?"
+    evidence:
+      - doc: "sample_posudek"
+        contains: "Ve vrtu V-3 byla v hloubce 3,1 až 3,9 m"
+
+  - id: myslinka-arsen
+    type: exact
+    question: "Jaký obsah arsenu byl zjištěn v sondě J6?"
+    evidence:
+      - doc: "IG a HG pruzkum Myslinka 2018"
+        contains: "zvýšený obsah As dosahující 63"
+
+  # --- odpověď ve více dokumentech --------------------------------------------
+  - id: melka-hladina
+    type: multi
+    question: "Kde byla zastižena hladina podzemní vody méně než metr pod terénem?"
+    evidence:
+      - doc: "průzkum-Lednice"
+        contains: "0,4 – 1,0 m pod povrchem terénu"
+      - doc: "Roudno"
+        contains: "zastižena v úrovni 0,5 m p. t."
+
+  - id: kaliste-znecisteni
+    type: multi
+    question: "Bylo v bývalých kalištích prokázáno nadlimitní znečištění zemin ropnými látkami?"
+    evidence:
+      - doc: "GF_P188240_ZZ Sedmirohé 10 sond"
+        contains: ["se tak nepotvrdilo", "nebylo průzkumnými pracemi zjištěno nadlimitní znečištění"]
+      - doc: "GF_P188241_ZZ Metan jih 4 sondy"
+        contains: ["pod sanačním limitem", "nadlimitní znečištění"]
+
+  # --- přílohy: tabulky a protokoly bez vektoru ------------------------------
+  # Příloha a text zprávy si tu odporují: tabulka uvádí 2000–4000 kPa, text
+  # 3000 kPa. Otázka poslouží i pro rozpory ve generovaných odpovědích.
+  - id: opatov-gt4c
+    type: annex
+    question: "Jaká je tabulková výpočtová únosnost geotypu GT4c na Novém Opatově?"
+    evidence:
+      - doc: "Predbezny IG a HG pruzkum Novy Opatov 2018"
+        contains: "GT4c R2 - R1 100- 210 2000- 4000"
+      - doc: "Predbezny IG a HG pruzkum Novy Opatov 2018"
+        contains: "tabulková výpočtová únosnost Rdt = 3000 kPa"
+
+  - id: kubice-odpady
+    type: annex
+    question: "Jak dopadly vzorky J2 a J10 při porovnání s limity pro odpady podle vyhlášky 273/2021?"
+    evidence:
+      - doc: "_zz_I_26_Ceska_Kubice_PoGTP"
+        contains: ["Vyhodnocení As Cd mg/kg sušiny", "ve výluhu odpadu (tab. 5.2"]
+
+  - id: myslinka-kovy
+    type: annex
+    question: "Jaké obsahy kovů byly zjištěny v zeminách z vrtů J16, J20 a J22 v Myslince?"
+    evidence:
+      - doc: "IG a HG pruzkum Myslinka 2018"
+        contains: "J16 J22 J20 0,50-2,50"
+
+  - id: pv62-vzorky
+    type: annex
+    question: "Z jakých hloubek byly odebrány vzorky zeminy ve vrtu PV62 u sondy VA145?"
+    evidence:
+      - doc: "GF_P188240_ZZ Sedmirohé 10 sond"
+        contains: ["1.VA145 PV62", "3. VA145 PV62"]
+
+  # --- korpus odpověď nemá ------------------------------------------------------
+  # Ověřeno: hledané místo ani označení se v žádném chunku nevyskytuje.
+  - id: neg-jihlava
+    type: negative
+    question: "Jaký je radonový index pozemku v Jihlavě?"
+
+  - id: neg-budejovice
+    type: negative
+    question: "Jaká je únosnost základové půdy pro most v Českých Budějovicích?"
+
+  - id: neg-hv500
+    type: negative
+    question: "Do jaké hloubky byl odvrtán vrt HV-500?"
+
+  - id: neg-lisen
+    type: negative
+    question: "Jaké výsledky přinesl geologický průzkum v Brně-Líšni?"
+
+  - id: neg-pfas
+    type: negative
+    question: "Jaká byla koncentrace PFAS v podzemní vodě?"
+
+  - id: neg-rozhledna
+    type: negative
+    question: "Kdy byla postavena rozhledna v Orličkách?"
