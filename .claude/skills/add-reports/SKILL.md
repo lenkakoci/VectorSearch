@@ -87,7 +87,7 @@ its assumptions, in the order they are worth checking:
 
 | assumption | when it does not hold |
 | --- | --- |
-| the PDF has a text layer | a scan without OCR yields nothing - `ERROR: Empty Markdown extracted` |
+| the PDF has a text layer | a scan without OCR yields nothing - reported as skipped (`chybí OCR vrstva`), the run carries on, and `check_pipeline --triage` lists it under CHYBÍ OCR VRSTVA |
 | there is a contents page with dot leaders (`1.2. NAME ...... 5`) | falls back to the heuristic below |
 | without one: numbering is continuous from 1 | no headings recovered, warning logged |
 | headings are numbered at all | an unnumbered "Závěr" in bold is never recognised |

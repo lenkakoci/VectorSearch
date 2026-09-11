@@ -13,7 +13,7 @@ Load this skill when touching anything in `data/scripts/`.
 | --- | --- | --- | --- | --- |
 | markdown | `extract_reports.py` | `data/PDFs/*.pdf` | `processed/markdown/<stem>.md` | source sha256, `MARKDOWN_VERSION` |
 | extract | `extract_reports.py` | cached Markdown | `processed/extracted/<stem>.json` | `SCHEMA_VERSION`, `GEMINI_MODEL` |
-| chunk | `chunk_and_embed.py` | Markdown + extraction | `processed/chunks/<stem>.parquet` | chunk params, embedding model/dims |
+| chunk | `chunk_and_embed.py` | Markdown + extraction + page kinds | `processed/chunks/<stem>.parquet` | chunk params, `CHUNKER_VERSION`, embedding model/dims |
 | import | `import_reports.py` | JSON + parquet | `documents`, `document_chunks` | any of the above |
 
 `ingest.py` diffs `processed/manifest.json` against the current config and runs
@@ -124,6 +124,48 @@ result with `Select-String -Path ..\processed\markdown\<stem>.md -Pattern "^#"`.
 Section-aware, from `chunker.py`: split on Markdown headings, window sections
 over `CHUNK_MAX_TOKENS` with `CHUNK_OVERLAP_TOKENS`, merge sections under
 `CHUNK_MIN_TOKENS`. The heading path becomes `section` and is the citation unit.
+
+Rules that are easy to break, each covered by a test in
+`data/scripts/tests/test_chunker.py`:
+
+- **The limit is enforced after joining.** Separators between paragraphs count,
+  and each window is measured once against the real joined text.
+- **Overlap is always delivered.** When no whole trailing paragraph fits the
+  overlap budget, the tail of the last one is cut instead.
+- **The heading goes on every window**, since `fts_chunk` is built from
+  `chunk_raw`. `Chunk.body` holds the text without it, and `locate_pages` must
+  probe with `body` - the heading is wording rebuilt from the contents page and
+  appears nowhere on the page it names. Probing with the heading dropped page
+  coverage to 7-33%.
+- **Merging stays within one section.** A small section is never glued to its
+  neighbour under the neighbour's label.
+
+**Bump `CHUNKER_VERSION` on any behavioural change**, including to
+`content_kind`. The four tunable parameters alone cannot see a logic change.
+
+## Annexes and `content_kind`
+
+`page_classifier.py` marks each page `prose`, `form` or `empty` when the Markdown
+is built, into `<stem>.pagekind.json`. A page is a form only when both its share
+of long lines (< 12%) and its share of Czech function words (< 6%) are low - the
+conjunction is what keeps borehole logs, which have ~1% function words but long
+clause-shaped lines. The word list has no prepositions: forms use `od`, `do`,
+`po` in their field labels as freely as prose does.
+
+The normaliser sets form pages - and everything past the annex boundary - aside
+before measuring anything, then appends them under `## Přílohy`. The boundary is
+the first form page after the last page carrying a numbered heading *listed in
+the contents page*.
+
+`content_kind` is then taken from the page kind of each chunk's `page_from`, not
+from its section: position decides the citation, page kind decides the
+embedding. Annex chunks are imported with `embedding IS NULL`; the vector query
+already filters on that, and `fts_chunk` still covers them. An unresolved page
+counts as prose.
+
+Thresholds are tuned to the fifteen reports converted so far (healthy 0.0-8.8%
+form characters, broken 28.5-79.5%). Check a report from a new surveyor with
+`check_pipeline.py --triage` before trusting them.
 
 Tune without spending anything:
 ```powershell

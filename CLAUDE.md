@@ -23,11 +23,15 @@ The goal is twofold:
 
 ```
 data/PDFs/*.pdf
-   │  extract_reports.py    pdfminer per page → normalise → LLM structured output
+   │  extract_reports.py    pdfminer per page → classify pages → normalise
+   │                        → LLM structured output
    ▼
 data/processed/markdown/<stem>.md
+                        <stem>.pages.json      per-page text, page attribution
+                        <stem>.pagekind.json   prose / form / empty per page
+                        <stem>.removed.json    what normalisation deleted, and why
 data/processed/extracted/<stem>.json     → documents table
-   │  chunk_and_embed.py    section-aware chunking → embeddings
+   │  chunk_and_embed.py    section-aware chunking → embeddings (prose only)
    ▼
 data/processed/chunks/<stem>.parquet     → document_chunks table
    │  import_reports.py     upsert into PostgreSQL
@@ -40,9 +44,13 @@ results with section-level citation
 
 `ingest.py` runs all three stages incrementally and is the normal entry point.
 `check_pipeline.py` verifies the result of every stage, makes no API calls and
-exits 1 on failure.
+exits 1 on failure; `--triage` groups what needs a decision, `--removed` prints
+what the normaliser deleted from each document and under which rule.
 
-## Two things to understand before changing anything
+Corpus today: 16 documents, 2040 chunks, of which 1015 are annex and carry no
+vector. Three source PDFs are scans without a text layer and are skipped.
+
+## Four things to understand before changing anything
 
 **The extraction schema is provisional.** It was written before any real report
 was available. `data/scripts/schemas.py` is deliberately loose: `report_type` is
@@ -54,6 +62,30 @@ final schema gets discovered — see `.claude/skills/data-ingestion/SKILL.md`.
 what was done under which parameters. Changing `SCHEMA_VERSION`, the model, or the
 chunk parameters invalidates exactly the affected stages and everything after
 them. Never write a stage that reprocesses everything unconditionally.
+
+**A version is a promise that equal versions mean equal output.**
+`MARKDOWN_VERSION` (normaliser), `SCHEMA_VERSION` (extraction) and
+`CHUNKER_VERSION` (chunker) are what the manifest compares. Change the *logic* of
+any of those modules without bumping its version and the manifest keeps the old
+output and calls it current — nothing reports it. This happened: `content_kind`
+changed from section-based to page-based without a bump and two documents kept
+chunks from the old rule. Bump on every behavioural change, however small.
+
+**Reports have annexes, and the pipeline knows it.** Borehole logs, laboratory
+certificates and coordinate tables follow the last chapter with no headings of
+their own. Without handling they inherited the last chapter's label - 130 of 216
+chunks of one report were cited as "8.4. Závěrečné zhodnocení". Two separate
+questions, two separate sources:
+
+| question | decided by | where |
+| --- | --- | --- |
+| how is this chunk cited? | **position** — everything past the annex boundary is filed under `## Přílohy` | `markdown_normalizer._annex_start` |
+| is it worth an embedding? | **page kind** — only a filled-in form is left without a vector | `chunk_and_embed.content_kind` from `<stem>.pagekind.json` |
+
+That split is why borehole logs are cited as annex *and* still searchable by
+meaning. Do not collapse it back into one signal: whichever signal wins, the
+other property is lost. The full rules and their failure modes are in
+`README.md` under "Jak vzniká struktura".
 
 ## Skills
 
@@ -107,6 +139,65 @@ now indexed under two configurations at once (`czech` for morphology,
 `search_reports.py` ORs `websearch_to_tsquery` over both. The dictionary comes
 from `postgres/Dockerfile`; see `.claude/skills/data-ingestion/SKILL.md` for why
 neither configuration works alone.
+
+## Traps this project has already fallen into
+
+- **An exit code of 0 is not verification.** A run can finish cleanly while part of
+  its output no longer matches the code that made it. Verify by recomputing: load
+  the Markdown, chunk it again, and compare with the parquet and the database.
+- **Verify after each paid batch, not at the end.** Two regressions (page
+  attribution falling to 7-33%, stale `content_kind`) surfaced only in the checks
+  and each meant re-embedding. Run `check_pipeline.py` before the next batch.
+- **Czech characters do not survive the shell.** A document list passed as
+  arguments arrives as `Orli?ky`. Call `ingest.main([...])` from Python with names
+  read from the manifest.
+- **A cover page measures as a form** - short lines, no verbs. The classifier
+  reclaims a leading run of up to three form pages as the cover; a longer cover
+  would slip past that.
+- **A sentence opening with a number looks like a heading.** Anything locating
+  headings must check the number against the contents-page outline.
+- **Two concurrent `--force` runs write the same files.** Run long regenerations
+  in the background once, and wait for them.
+
+## Proposed next work
+
+In order of readiness. None has been started.
+
+**1. Aggregate `extra_fields` and settle the extraction schema.** Most ready.
+Extraction repeatedly reports the same keys across documents - `cislo_zakazky`,
+`cislo_geofond`, `hydrogeologicky_rajon`, `souradnice_vrtu_sjtsk`,
+`hloubka_vrtu`, `vystroj_vrtu` - so for the first time there is enough data to
+promote fields and tighten `report_type` to a `Literal`. The procedure is in
+`.claude/skills/data-ingestion/SKILL.md` ("Evolving the extraction schema"):
+aggregate `extra_fields` and `missing_fields` in SQL, edit `schemas.py`, bump
+`SCHEMA_VERSION`, add an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration.
+Re-extraction reads cached Markdown, so no PDF is re-parsed - but every document
+is extracted again, which is paid.
+
+**2. Measure search quality.** Nothing measures relevance today:
+`check_pipeline.py` verifies artefacts, and "is this chunking better" has been
+answered by inspecting section labels. Build a small golden set - realistic
+queries in Czech, each with the document and section that should answer it,
+including morphology cases ("vrty" vs "vrtů") and annex-only facts (a borehole
+number) - and report recall@k / MRR per search mode. Worth doing *before* the
+next retrieval change (reranker, parent-child expansion), or its effect will be
+guessed again. The query embedding is the only cost.
+
+**3. Split bundles into their sub-reports.** Largest open structural issue.
+`GF_P188240_ZZ Sedmirohé 10 sond` is eleven reports under one cover (sub-report
+cover pages at 1, 22, 43, 89, 108, 131, 150, 173, 197, 220, 242) and `Metan jih`
+is five. `_extract_toc` takes the first title for each section number across all
+contents blocks, so eleven outlines collapse into one of nine entries, and a
+sub-report's `3.2. Podzemní vody` lands after `8. Závěr` - 59 chunks of Sedmirohé
+and 21 of Metan jih sit under it. `check_pipeline.py --removed` shows the bundle
+at a glance: eleven separate contents blocks. The fix touches document identity
+(one source file, several `documents` rows), extraction (one call per
+sub-report) and citations, so it wants its own design first.
+
+Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
+its annex has no form pages after the last heading, so there is no boundary to
+find; Monitoring has one chunk without a section (its front matter, since no
+title is promoted); three scans await OCR.
 
 ## Always-on engineering rules
 
