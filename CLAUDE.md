@@ -37,10 +37,18 @@ data/processed/chunks/<stem>.parquet     → document_chunks table
    │  import_reports.py     upsert into PostgreSQL
    ▼
 PostgreSQL (pgvector HNSW + tsvector GIN)
-   │  search_reports.py     vector or hybrid (RRF) retrieval
+   │  search_service.py     vector, full-text or hybrid (RRF) retrieval
+   │                        called by search_reports.py (CLI) and search_api.py (HTTP)
    ▼
-results with section-level citation
+results with section-level citation, per-branch scores and highlights
 ```
+
+`search_api.py` (FastAPI, port 8010) and `frontend/` (React) put the three modes
+side by side for demonstrations. Neither contains search logic; both sit on
+`search_service.py`, so a change there is the only way to change what the CLI,
+the API and the page return. `deploy/local/docker-compose.yml` runs both next to
+PostgreSQL, bound to loopback: the API has no authentication and the reports are
+internal.
 
 `ingest.py` runs all three stages incrementally and is the normal entry point.
 `check_pipeline.py` verifies the result of every stage, makes no API calls and
@@ -205,7 +213,8 @@ title is promoted); three scans await OCR.
 - Converting and checking cost nothing; extraction and embeddings cost money.
   Never run the paid stages on a document whose Markdown nobody has looked at —
   the procedure is in `.claude/skills/add-reports/SKILL.md`.
-- Use Pydantic models for structured data and FastAPI if an API is ever added.
+- Use Pydantic models for structured data; the API is FastAPI (`search_api.py`)
+  and stays a thin layer over `search_service.py`.
 - Public functions and classes need useful docstrings. Use `logging`, never `print`,
   outside of CLI output intended for the user.
 - Keep comments rare and only for non-obvious logic.

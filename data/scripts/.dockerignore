@@ -1,0 +1,9 @@
+# Secrets and local state never enter the image; credentials come from
+# docker-compose (env_file / environment).
+.env
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+tests/
+adhoc_*.py

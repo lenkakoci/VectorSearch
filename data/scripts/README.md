@@ -20,6 +20,7 @@ uv run python configure_postgresql.py   # once, and after any SQL change
 uv run python ingest.py                 # whenever a new report arrives
 uv run python check_pipeline.py         # verify every stage; costs nothing
 uv run python search_reports.py "dotaz" --hybrid
+uv run uvicorn search_api:app --reload --port 8010   # API for the web demo
 ```
 
 Adding reports has a gated procedure — convert and check for free before paying
@@ -42,7 +43,9 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `import_reports.py` | JSON + parquet → PostgreSQL (upsert). |
 | `ingest.py` | Incremental orchestrator. The usual entry point. |
 | `check_pipeline.py` | Verifies each stage's artefacts. No API, writes nothing, exits 1 on failure. |
-| `search_reports.py` | Vector and hybrid (RRF) search from the CLI. |
+| `search_reports.py` | Vector, full-text and hybrid (RRF) search from the CLI. Argument parsing and printing only. |
+| `search_service.py` | The search itself as a library: SQL for every branch, query embedding with a cache, RRF with per-branch ranks, `ts_headline` highlights, neighbours, facets. Takes a connection, returns dicts. |
+| `search_api.py` | FastAPI over the service for the web demo (`frontend/`). Pydantic models, no search logic. Dependency group `api`, installed by default. |
 
 ## Flags worth knowing
 
@@ -60,6 +63,7 @@ uv run python check_pipeline.py --only Roudno      # one document
 
 uv run python search_reports.py "q" --mode fts     # full text only, no API call
 uv run python search_reports.py "autor:Poul q"     # inline metadata filter
+uv run python search_reports.py "sonda" --kind annex --mode fts   # annex only
 uv run python search_reports.py --list --obec Lednice
 ```
 
@@ -127,7 +131,20 @@ uv run python -c "from chunker import chunk_markdown; import pathlib; cs = chunk
   `hnsw.iterative_scan` rather than reordering the query.
 - One search is one embedding request and the quota is per request per minute,
   so a burst of searches can hit 429. `embed_query()` retries like the ingestion
-  calls do; `--mode fts` avoids the call entirely.
+  calls do; `--mode fts` avoids the call entirely. `search_service.py` also keeps
+  the last few hundred query embeddings in memory, so re-running a query with
+  other filters or modes costs SQL only, and `compare()` embeds once for all
+  three modes.
+- Highlights and `lexical_match` come from `ts_headline` and `@@` in an outer
+  query around the ranking, so they are computed only for the rows that survive
+  `LIMIT`. `ts_headline` re-parses the chunk with the dictionary; on every
+  candidate it would dominate the query time.
+- `ts_headline` runs under the `czech` configuration only. A match found solely
+  by the `czech_literal` branch (a query typed without diacritics against a word
+  written with them) is returned but not highlighted.
+- The API container (`Dockerfile.api`) pre-fetches the tiktoken encoding at build
+  time: `chunker.py` loads it at import and `pipeline_common` imports `chunker`,
+  so without that the container would need the network to start.
 - `tiktoken` sizes chunks locally and is not Gemini's tokenizer, so counts are
   approximate. The 800-token target leaves ample margin under the 2048-token
   input limit of `gemini-embedding-001`.

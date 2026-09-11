@@ -25,7 +25,19 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    # TestClient for the API tests.
+    "httpx>=0.28.0",
 ]
+# The HTTP API for the web demo (search_api.py). Installed by default so that
+# `uv run uvicorn search_api:app` works without extra flags; the pipeline
+# scripts do not import it.
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "api"]
 
 [tool.pytest.ini_options]
 # The pipeline scripts are flat modules imported by name (``from chunker import

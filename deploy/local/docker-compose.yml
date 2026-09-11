@@ -26,3 +26,36 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # Search API for the web demo. Reads credentials (PGPASSWORD, GEMINI_API_KEY)
+  # from data/scripts/.env; the host name is overridden to reach the postgres
+  # service inside the compose network.
+  api:
+    build:
+      context: ../../data/scripts
+      dockerfile: Dockerfile.api
+    image: vectorsearch/api:0.1
+    env_file:
+      - ../../data/scripts/.env
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      CORS_ORIGINS: http://localhost:3001,http://localhost:5173
+    ports:
+      # Loopback only: the reports are internal and the API has no authentication.
+      - "127.0.0.1:8010:8010"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The React page, served by nginx, which proxies /api to the api service.
+  frontend:
+    build:
+      context: ../../frontend
+    image: vectorsearch/frontend:0.1
+    ports:
+      - "127.0.0.1:3001:80"
+    depends_on:
+      - api
+    restart: unless-stopped

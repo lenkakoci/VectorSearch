@@ -1,0 +1,366 @@
+"""HTTP API over the search service, for the web demo.
+
+A thin FastAPI layer: every endpoint validates its input with a Pydantic model,
+opens one connection, calls ``search_service.py`` and returns what it got. No
+search logic lives here, so the command line and the web see the same results.
+
+    GET  /api/health                                     corpus counts
+    GET  /api/facets                                     values every filter can take
+    POST /api/search                                     one mode
+    POST /api/compare                                    fts, vector and hybrid side by side
+    GET  /api/chunks/{document_id}/{chunk_index}/context the chunks around a hit
+    GET  /api/documents/{document_id}                    one report with its extraction
+
+Inline prefixes in the query (``autor:Poul hladina vody``) work exactly as on
+the command line and win over the structured filters, so a demo can show both.
+
+Run from data/scripts:
+    uv run uvicorn search_api:app --reload --port 8010
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import date
+from typing import Any, Literal
+
+import psycopg2
+from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from pipeline_common import configure_logging, load_connection_params, load_settings
+from search_filters import Filters, build_filters, parse_query
+from search_service import (
+    EmbeddingUnavailable,
+    SearchResult,
+    compare,
+    corpus_counts,
+    facets,
+    get_document,
+    neighbours,
+    run_search,
+)
+
+logger = logging.getLogger(__name__)
+
+Mode = Literal["fts", "vector", "hybrid"]
+ContentKind = Literal["prose", "annex"]
+
+_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3001"
+
+
+class FiltersIn(BaseModel):
+    """Structured metadata restrictions, as the web form sends them.
+
+    Text fields are lists so a multi-select maps onto them directly; dates take
+    ``YYYY``, ``YYYY-MM`` or ``YYYY-MM-DD`` and widen to the edge of the period.
+    """
+
+    authors: list[str] = []
+    organizations: list[str] = []
+    municipalities: list[str] = []
+    clients: list[str] = []
+    report_types: list[str] = []
+    locality: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    document_ids: list[str] = []
+    content_kind: ContentKind | None = None
+
+    def to_filters(self) -> Filters:
+        """Convert to the search vocabulary."""
+        return build_filters(
+            author=self.authors,
+            organization=self.organizations,
+            municipality=self.municipalities,
+            client=self.clients,
+            report_type=self.report_types,
+            locality=self.locality,
+            date_from=self.date_from,
+            date_to=self.date_to,
+            document_ids=self.document_ids,
+            content_kind=self.content_kind,
+        )
+
+
+class CompareRequest(BaseModel):
+    """A query to run in every mode."""
+
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(10, ge=1, le=50)
+    filters: FiltersIn = FiltersIn()
+
+
+class SearchRequest(CompareRequest):
+    """A query to run in one mode."""
+
+    mode: Mode = "hybrid"
+
+
+class Hit(BaseModel):
+    """One chunk in a ranking, with everything needed to say why it is there."""
+
+    chunk_id: str
+    document_id: str
+    chunk_index: int
+    section: str | None
+    content_kind: str
+    page_from: int | None
+    page_to: int | None
+    chunk_raw: str
+    snippet: str
+    headline: str | None
+    lexical_match: bool
+    title: str | None
+    author: str | None
+    organization: str | None
+    municipality: str | None
+    report_type: str | None
+    report_date: date | None
+    locality: str | None
+    vector_rank: int | None
+    vector_score: float | None
+    fts_rank: int | None
+    fts_score: float | None
+    rrf_score: float | None
+
+
+class SearchResponse(BaseModel):
+    """One ranking plus its diagnostics."""
+
+    query: str
+    mode: Mode
+    limit: int
+    fetch: int
+    hits: list[Hit]
+    debug: dict[str, Any]
+
+
+class CompareResponse(BaseModel):
+    """The same query in every mode."""
+
+    query: str
+    fts: SearchResponse
+    vector: SearchResponse
+    hybrid: SearchResponse
+
+
+class FacetValue(BaseModel):
+    value: str
+    count: int
+
+
+class ContentKindCount(BaseModel):
+    value: str
+    count: int
+    with_vector: int
+
+
+class DocumentSummary(BaseModel):
+    id: str
+    title: str | None
+    author: str | None
+    report_date: date | None
+    report_type: str | None
+    locality: str | None
+    municipality: str | None
+    organization: str | None
+    chunks: int
+    chunks_with_vector: int
+
+
+class FacetsResponse(BaseModel):
+    """What every filter can take, keyed by filter name."""
+
+    author: list[FacetValue]
+    organization: list[FacetValue]
+    municipality: list[FacetValue]
+    client: list[FacetValue]
+    report_type: list[FacetValue]
+    years: dict[str, int | None]
+    content_kinds: list[ContentKindCount]
+    documents: list[DocumentSummary]
+
+
+class ContextChunk(BaseModel):
+    chunk_index: int
+    section: str | None
+    content_kind: str
+    page_from: int | None
+    page_to: int | None
+    chunk_raw: str
+    is_hit: bool
+
+
+class ContextResponse(BaseModel):
+    document_id: str
+    title: str | None
+    chunks: list[ContextChunk]
+
+
+class DocumentResponse(BaseModel):
+    id: str
+    source_file: str
+    title: str | None
+    report_type: str | None
+    locality: str | None
+    report_date: date | None
+    author: str | None
+    client: str | None
+    summary: str | None
+    extraction: dict[str, Any]
+    extraction_model: str | None
+    extraction_schema_version: int
+    chunks: int
+
+
+class HealthResponse(BaseModel):
+    status: str
+    documents: int
+    chunks: int
+    chunks_with_vector: int
+
+
+@contextmanager
+def connection() -> Iterator[Any]:
+    """Open one database connection for the duration of a request."""
+    conn = psycopg2.connect(**load_connection_params())
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _resolve(request: CompareRequest) -> tuple[str, Filters]:
+    """Split inline prefixes off the query and merge them with the form filters."""
+    text, inline = parse_query(request.query)
+    if not text:
+        raise HTTPException(status_code=422, detail="Dotaz neobsahuje žádný hledaný text, jen filtry.")
+    return text, inline.merge(request.filters.to_filters())
+
+
+def _response(result: SearchResult) -> SearchResponse:
+    return SearchResponse(
+        query=result.query,
+        mode=result.mode,  # type: ignore[arg-type]
+        limit=result.limit,
+        fetch=result.fetch,
+        hits=[Hit.model_validate(hit) for hit in result.hits],
+        debug=result.debug,
+    )
+
+
+def _embedding_error(exc: EmbeddingUnavailable) -> HTTPException:
+    logger.error("Embedding unavailable: %s", exc)
+    return HTTPException(
+        status_code=503,
+        detail="Embedding dotazu není dostupný (chybí klíč nebo je vyčerpaná kvóta). "
+        "Fulltextový režim funguje bez něj.",
+    )
+
+
+def _parse_uuid(value: str) -> str:
+    try:
+        return str(uuid.UUID(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{value!r} není UUID dokumentu") from exc
+
+
+router = APIRouter(prefix="/api")
+
+
+@router.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    """Report whether the database answers and how much it holds."""
+    try:
+        with connection() as conn:
+            counts = corpus_counts(conn)
+    except psycopg2.Error as exc:
+        raise HTTPException(status_code=503, detail=f"Databáze neodpovídá: {exc}") from exc
+    return HealthResponse(status="ok", **counts)
+
+
+@router.get("/facets", response_model=FacetsResponse)
+def get_facets() -> FacetsResponse:
+    """Return the values every filter can take, with counts."""
+    with connection() as conn:
+        return FacetsResponse.model_validate(facets(conn))
+
+
+@router.post("/search", response_model=SearchResponse)
+def search(request: SearchRequest) -> SearchResponse:
+    """Search in one mode."""
+    text, filters = _resolve(request)
+    try:
+        with connection() as conn:
+            result = run_search(conn, text, request.mode, filters, request.limit, SETTINGS)
+    except EmbeddingUnavailable as exc:
+        raise _embedding_error(exc) from exc
+    return _response(result)
+
+
+@router.post("/compare", response_model=CompareResponse)
+def compare_modes(request: CompareRequest) -> CompareResponse:
+    """Run the query in every mode; one embedding request serves all three."""
+    text, filters = _resolve(request)
+    try:
+        with connection() as conn:
+            results = compare(conn, text, filters, request.limit, SETTINGS)
+    except EmbeddingUnavailable as exc:
+        raise _embedding_error(exc) from exc
+    return CompareResponse(query=text, **{mode: _response(result) for mode, result in results.items()})
+
+
+@router.get("/chunks/{document_id}/{chunk_index}/context", response_model=ContextResponse)
+def chunk_context(
+    document_id: str,
+    chunk_index: int,
+    before: int = Query(1, ge=0, le=5),
+    after: int = Query(1, ge=0, le=5),
+) -> ContextResponse:
+    """Return the chunks around one chunk, in reading order."""
+    document_id = _parse_uuid(document_id)
+    with connection() as conn:
+        document = get_document(conn, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Dokument nenalezen")
+        chunks = neighbours(conn, document_id, chunk_index, before, after)
+    if not any(chunk["is_hit"] for chunk in chunks):
+        raise HTTPException(status_code=404, detail="Chunk nenalezen")
+    return ContextResponse(document_id=document_id, title=document.get("title"), chunks=chunks)
+
+
+@router.get("/documents/{document_id}", response_model=DocumentResponse)
+def document_detail(document_id: str) -> DocumentResponse:
+    """Return one report with its full extraction."""
+    document_id = _parse_uuid(document_id)
+    with connection() as conn:
+        document = get_document(conn, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Dokument nenalezen")
+    document["extraction"] = document.pop("extraction_json") or {}
+    return DocumentResponse.model_validate(document)
+
+
+def create_app() -> FastAPI:
+    """Build the application."""
+    configure_logging()
+    origins = [item.strip() for item in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if item.strip()]
+    application = FastAPI(title="VectorSearch demo API", version="0.1.0")
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    application.include_router(router)
+    return application
+
+
+SETTINGS = load_settings()
+app = create_app()

@@ -16,6 +16,10 @@ data/processed/
 # Local PostgreSQL data directory (bind mount)
 deploy/local/data/
 
+# Frontend build artefacts and dependencies
+frontend/node_modules/
+frontend/dist/
+
 # Python
 __pycache__/
 *.py[cod]

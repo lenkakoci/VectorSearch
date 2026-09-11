@@ -41,6 +41,10 @@ uv run python ingest.py
 
 # 5) Vyhledávání
 uv run python search_reports.py "hladina podzemní vody" --hybrid
+
+# 6) Webové demo (API + React), podrobně v sekci „Webové rozhraní"
+uv run uvicorn search_api:app --reload --port 8010
+cd ..\..\frontend; npm install; npm run dev        # http://localhost:5173
 ```
 
 ## Jak přidat nový posudek
@@ -88,7 +92,8 @@ Přegenerovat se dá přes `extract_reports.py --markdown-only --force --only <s
 | `data/PDFs/` | Vstupní posudky — **negitované**, interní dokumenty |
 | `data/samples/` | Testovací fixture pro ověření pipeline |
 | `data/processed/` | Reprodukovatelná cache (Markdown, JSON, parquet, manifest) |
-| `data/scripts/` | Pipeline skripty (uv-managed) |
+| `data/scripts/` | Pipeline skripty (uv-managed), vyhledávací služba a její API |
+| `frontend/` | Webové demo vyhledávání (React + Vite + Tailwind) |
 | `CLAUDE.md`, `.claude/skills/` | Konfigurace pro Claude Code |
 
 ## Skripty
@@ -104,6 +109,8 @@ Spouštět z `data/scripts`.
 | `import_reports.py` | Parquet + JSON → PostgreSQL |
 | `check_pipeline.py` | Kontrola všech fází u každého dokumentu |
 | `search_reports.py` | Vyhledávání z příkazové řádky |
+| `search_service.py` | Vyhledávací logika jako knihovna (SQL, embedding, RRF, kontext, facety); volá ji CLI i API |
+| `search_api.py` | FastAPI nad službou pro webové demo (`uv run uvicorn search_api:app --port 8010`) |
 
 Užitečné přepínače:
 
@@ -342,6 +349,7 @@ uv run python search_reports.py "hladina vody" --autor Poul --obec Lednice --mod
 | `org:` | `--org` | zpracovatelská organizace |
 | `od:` / `do:` | `--od` / `--do` | rozsah dat (`2019`, `2019-09`, `2019-09-11`) |
 | `doc:` | `--document` | konkrétní UUID, lze opakovat |
+| `druh:` | `--kind` | část zprávy: `prose` (tělo) nebo `annex` (přílohy; bez vektoru, najde je jen fulltext) |
 
 Textové filtry hledají podřetězec, takže `autor:Poul` trefí i
 `Mgr. Josefína Bízová, RNDr. Mgr. Ivan Poul, Ph.D.`. Hodnotu s mezerou dej do
@@ -369,6 +377,68 @@ uživatele se **záměrně nepřevádí na SQL modelem**: model si může vymysl
 sloupec nebo vrátit věcně špatný výsledek bez chyby, a u geologických posudků je
 tichá chyba bezpečnostní problém — ze stejného důvodu má extrakce zakázáno
 cokoli odvozovat.
+
+## Webové rozhraní
+
+Demo pro ukázku rozdílu mezi hledáním podle slov a podle významu. Stejná logika
+jako v CLI: `search_service.py` volá `search_reports.py` i `search_api.py`, nic
+se neduplikuje.
+
+```
+frontend/ (React, port 5173 / v Dockeru 3001)
+   │  /api  (Vite proxy nebo nginx)
+data/scripts/search_api.py  (FastAPI, port 8010)
+   │
+data/scripts/search_service.py  →  PostgreSQL
+```
+
+Lokálně, ve dvou terminálech:
+
+```powershell
+cd data\scripts;  uv run uvicorn search_api:app --reload --port 8010
+cd frontend;      npm install; npm run dev        # http://localhost:5173
+```
+
+V Dockeru vedle databáze (obrazy se staví z `data/scripts/Dockerfile.api`
+a `frontend/Dockerfile`; API čte `data/scripts/.env`):
+
+```powershell
+cd deploy\local
+docker compose up -d --build api frontend         # http://localhost:3001
+```
+
+Co stránka umí:
+
+- **Režimy** Fulltext / Sémantické / Hybridní / **Porovnat** – poslední spustí
+  jeden dotaz ve všech třech režimech vedle sebe s jedním embeddingem. Úryvek,
+  který se objeví ve více sloupcích, dostane stejné písmeno; z toho je na první
+  pohled vidět, co našla jen slova, co jen význam a co obojí.
+- **Odznaky** u každého výsledku: `slova` / `význam` / `obojí`, `bez shody slov`
+  (sémantický výsledek, ve kterém není žádné hledané slovo), `příloha`.
+- **Zvýraznění** hledaných slov dělá PostgreSQL (`ts_headline` s konfigurací
+  `czech`), takže se zvýrazní i skloněný tvar: dotaz `vrty` označí `vrtů`.
+- **Upřesnit hledání**: autor, organizace, obec, klient, typ, dokument (výběr
+  více hodnot s počty), období, část zprávy (tělo / přílohy). Každý filtr má
+  vypínač, výběr se při vypnutí neztratí. Inline prefixy v dotazu fungují také.
+- **Karta výsledku**: název, cesta sekce, strana, chunk, skóre, celý text,
+  kontext ±1 chunk (sousedé v pořadí dokumentu), metadata dokumentu, rozpis
+  „proč nalezeno" (pořadí a skóre v každé větvi, dosazený vzorec RRF).
+- **Expert / debug** (sbalený): požadavek, lexémy `tsquery` v obou
+  konfiguracích, SQL a parametry filtrů, časy, počty kandidátů, tabulka
+  pořadí × skóre.
+
+Ukázkové dotazy jsou v poli jako tlačítka: `hladina podzemní vody` (najdou
+všechny tři), `vrty pro tepelné čerpadlo` (skloňování), `kde je voda blízko pod
+povrchem` (jen význam), `ČSN 75 9010` (jen slova), `sonda S-2` s filtrem
+příloh (jen fulltext, přílohy nemají vektor).
+
+API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
+`/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`) má OpenAPI na
+`http://localhost:8010/docs`. Nemá autentizaci a v Compose je jen na
+`127.0.0.1` – posudky jsou interní.
+
+Testy: `uv run pytest` v `data/scripts` (filtry, fúze, API bez databáze),
+`npm test` ve `frontend` (render nad odpovědí zachycenou z API).
 
 ## Český fulltext
 
@@ -403,7 +473,7 @@ V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez 
 | **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
 | **Kvalita vyhledávání se neměří** | žádná sada zlatých dotazů, žádné nDCG | `check_pipeline` ověřuje artefakty, ne relevanci |
-| **Reranker a rozšíření o sousedy** | nenasazeno | `chunk_index` a `UNIQUE (document_id, chunk_index)` to umožňují triviálně; má smysl až po opravě sekcí |
+| **Reranker** | nenasazeno | sousední chunky už vrací API (`/api/chunks/…/context`) a UI („Kontext ±1"); reranker má smysl až po opravě sekcí |
 
 ### Na co si dát pozor
 

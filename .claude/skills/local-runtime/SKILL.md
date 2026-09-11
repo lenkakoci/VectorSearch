@@ -9,9 +9,12 @@ Load this skill when starting, stopping or debugging the local stack.
 
 ## Compose
 
-Local Compose lives in `deploy/local`. One service: `postgres`, built from
+Local Compose lives in `deploy/local`. Three services: `postgres`, built from
 `postgres/Dockerfile` (`pgvector/pgvector:pg17` plus the Czech hunspell
-dictionary for full-text search).
+dictionary for full-text search), and the optional web demo, `api`
+(`data/scripts/Dockerfile.api`, FastAPI on 127.0.0.1:8010, reads
+`data/scripts/.env`) and `frontend` (`frontend/Dockerfile`, nginx on
+127.0.0.1:3001 proxying `/api` to `api`). The pipeline needs only `postgres`.
 
 The image is not just the base image, so after changing `postgres/Dockerfile` or
 `postgres/tsearch_data/` run `docker compose build postgres` before `up`.
@@ -40,6 +43,11 @@ time. Stop the other one before starting this.
 3. `uv run python ingest.py` from `data/scripts` — extract, chunk, embed, import.
 4. `uv run python check_pipeline.py` — verifies every stage. Costs nothing.
 5. `uv run python search_reports.py "<dotaz>" --hybrid` to verify.
+6. Web demo, optional: `docker compose up -d --build api frontend` from
+   `deploy/local` and open http://localhost:3001. Or without Docker:
+   `uv run uvicorn search_api:app --reload --port 8010` from `data/scripts`
+   and `npm run dev` from `frontend` (http://localhost:5173). Port 8010 can be
+   held by only one of the two at a time.
 
 Adding reports has its own gated procedure — see the `add-reports` skill. Do not
 start with `ingest.py` on documents nobody has looked at.
