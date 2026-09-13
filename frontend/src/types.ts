@@ -1,6 +1,6 @@
 // Mirrors the Pydantic models in data/scripts/search_api.py.
 
-export type Mode = 'fts' | 'vector' | 'hybrid'
+export type Mode = 'fts' | 'vector' | 'hybrid' | 'rerank'
 export type View = Mode | 'compare'
 export type Branch = 'fts' | 'vector'
 export type ContentKind = 'prose' | 'annex'
@@ -29,6 +29,21 @@ export interface Hit {
   fts_rank: number | null
   fts_score: number | null
   rrf_score: number | null
+  candidate_rank?: number | null
+  rerank_grade?: number | null
+  rerank_reason?: string | null
+}
+
+export interface RerankStats {
+  reranker: string
+  model: string | null
+  graded: number
+  cached: number
+  calls: number
+  ms: number
+  candidates: number
+  min_grade: number
+  passed: number
 }
 
 export interface SearchDebug {
@@ -45,7 +60,13 @@ export interface SearchDebug {
   vector_candidates?: number
   fts_ms?: number
   fts_candidates?: number
-  tsquery?: { czech: string; czech_literal: string }
+  fts_any_ms?: number
+  fts_any_candidates?: number
+  fts_match?: 'all' | 'any'
+  query_words?: string[]
+  tsquery?: { czech: string | null; czech_literal: string | null; any?: string | null }
+  rerank?: RerankStats
+  rerank_error?: string
   [key: string]: unknown
 }
 
@@ -63,6 +84,7 @@ export interface CompareResponse {
   fts: SearchResponse
   vector: SearchResponse
   hybrid: SearchResponse
+  rerank?: SearchResponse | null
 }
 
 export interface FacetValue {
@@ -111,9 +133,13 @@ export interface CompareRequest {
   query: string
   limit: number
   filters: RequestFilters
+  rerank?: boolean
 }
 
-export interface SearchRequest extends CompareRequest {
+export interface SearchRequest {
+  query: string
+  limit: number
+  filters: RequestFilters
   mode: Mode
 }
 

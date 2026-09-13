@@ -13,7 +13,7 @@ export const MODE_INFO: Record<View, ModeInfo> = {
     label: 'Fulltext',
     short: 'slova',
     explain:
-      'Hledá zadaná slova, i ve skloněných tvarech („vrty“ najde „vrtů“). Nezná význam: „voda blízko pod povrchem“ nenajde „mělká hladina podzemní vody“.',
+      'Hledá úryvky, které obsahují všechna zadaná slova, i ve skloněných tvarech („vrty“ najde „vrtů“). Nezná význam: „voda blízko pod povrchem“ nenajde „mělká hladina podzemní vody“.',
     scoreLabel: 'ts_rank',
   },
   vector: {
@@ -30,15 +30,24 @@ export const MODE_INFO: Record<View, ModeInfo> = {
       'Sloučí obě pořadí metodou Reciprocal Rank Fusion. Nahoře skončí to, co našly obě metody; přesné kódy i parafráze se navzájem doplní.',
     scoreLabel: 'RRF',
   },
+  rerank: {
+    label: 'Reranking',
+    short: 'známka',
+    explain:
+      'Model Gemini přečte 40 kandidátů, po dvaceti z vektoru a z fulltextu, spolu s otázkou a každému dá známku 0–3 podle toho, zda na otázku odpovídá. Úryvky pod známkou 2 jsou pod čarou: do generované odpovědi by nešly.',
+    scoreLabel: 'známka 0–3',
+  },
   compare: {
     label: 'Porovnat',
     short: 'vedle sebe',
-    explain: 'Stejný dotaz ve všech třech režimech vedle sebe. Stejné písmeno = stejný úryvek nalezený více způsoby.',
+    explain: 'Stejný dotaz ve všech režimech vedle sebe. Stejné písmeno = stejný úryvek nalezený více způsoby.',
     scoreLabel: '',
   },
 }
 
 export const MODES: Mode[] = ['fts', 'vector', 'hybrid']
+export const COMPARE_MODES: Mode[] = ['fts', 'vector', 'hybrid', 'rerank']
+export const MAX_GRADE = 3
 
 export const DEMO_QUERIES: { query: string; why: string }[] = [
   { query: 'hladina podzemní vody', why: 'najdou všechny tři' },
@@ -51,15 +60,21 @@ export const DEMO_QUERIES: { query: string; why: string }[] = [
 export function scoreOf(hit: Hit, mode: Mode): number | null {
   if (mode === 'fts') return hit.fts_score
   if (mode === 'vector') return hit.vector_score
+  if (mode === 'rerank') return hit.rerank_grade ?? null
   return hit.rrf_score
 }
 
 export function branchesOf(mode: Mode): ('fts' | 'vector')[] {
-  if (mode === 'hybrid') return ['vector', 'fts']
+  if (mode === 'hybrid' || mode === 'rerank') return ['vector', 'fts']
   return [mode]
 }
 
 export function formatScore(value: number | null): string {
   if (value == null) return '–'
   return value.toFixed(4)
+}
+
+export function formatModeScore(hit: Hit, mode: Mode): string {
+  if (mode === 'rerank') return hit.rerank_grade == null ? '–' : `${hit.rerank_grade}/${MAX_GRADE}`
+  return formatScore(scoreOf(hit, mode))
 }

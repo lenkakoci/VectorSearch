@@ -11,24 +11,31 @@ contains, so the set survives re-chunking; ``text_match.py`` does the loose
 comparison. A question has several evidence items when its answer is spread
 over several places.
 
-Reported per mode (``fts``, ``vector``, ``hybrid``) over the top ``--depth``:
+Reported per mode over the top ``--depth``:
 
 - recall@k: share of a question's evidence items found in the top k;
 - MRR: reciprocal rank of the first relevant chunk, 0 when none was found.
 
+Modes are those of ``search_service.py``: ``fts``, ``vector`` and ``hybrid``
+by default, plus ``fts_any`` and ``hybrid_any`` (any-word full text) and
+``rerank`` (forty ``hybrid_any`` candidates graded by Gemini) on request.
+
 Questions without an answer in the corpus (type ``negative``) take no part in
 recall or MRR. The report shows instead what retrieval still returns for them:
-the vector branch always returns something, and a relevance gate in front of
-any generated answer will have to reject exactly that.
+the vector branch always returns something. With ``rerank`` the report also
+scores the relevance gate: for how many answerable questions a relevant chunk
+passed it, and for how many unanswerable ones nothing did.
 
 Cost: one query embedding per question, because ``compare()`` embeds once for
-all three modes. ``--modes fts`` makes no API call at all, and ``--check`` only
-verifies the golden set against the database.
+every mode, and with ``rerank`` one or two grading calls per question for
+chunks not graded before. ``--modes fts fts_any`` makes no API call at all, and
+``--check`` only verifies the golden set against the database.
 
 Run from data/scripts:
     uv run python eval_retrieval.py --check
     uv run python eval_retrieval.py
-    uv run python eval_retrieval.py --type annex exact --modes fts
+    uv run python eval_retrieval.py --modes fts fts_any vector hybrid hybrid_any rerank
+    uv run python eval_retrieval.py --type annex exact --modes fts fts_any
 """
 
 from __future__ import annotations
@@ -55,8 +62,9 @@ from pipeline_common import (
     load_connection_params,
     load_settings,
 )
+from rerank_service import MIN_GRADE, RerankUnavailable
 from search_filters import Filters
-from search_service import MODES, EmbeddingUnavailable, compare, run_search
+from search_service import ALL_MODES, MODES, RERANK_MODE, EmbeddingUnavailable, SearchResult, compare
 from text_match import contains_normalized
 
 logger = logging.getLogger(__name__)
@@ -67,7 +75,14 @@ DEPTH = 40
 CUTOFFS = (5, 10, 40)
 QUESTION_TYPES = ("morphology", "exact", "paraphrase", "multi", "annex", "negative")
 
-_SCORE_KEY = {"fts": "fts_score", "vector": "vector_score", "hybrid": "rrf_score"}
+_SCORE_KEY = {
+    "fts": "fts_score",
+    "fts_any": "fts_score",
+    "vector": "vector_score",
+    "hybrid": "rrf_score",
+    "hybrid_any": "rrf_score",
+    "rerank": "rerank_grade",
+}
 
 
 def _nfc(text: str) -> str:
@@ -238,6 +253,26 @@ def summarize(
     return summary
 
 
+def summarize_gate(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Score the relevance gate: did it let relevant chunks through, and block the rest?
+
+    Returns None when reranking did not run.
+    """
+    graded = [row for row in rows if RERANK_MODE in row["modes"]]
+    if not graded:
+        return None
+    positives = [row for row in graded if not row["negative"]]
+    negatives = [row for row in graded if row["negative"]]
+    return {
+        "min_grade": MIN_GRADE,
+        "answerable": len(positives),
+        "relevant_passed": sum(1 for row in positives if row["modes"][RERANK_MODE]["relevant_passed"]),
+        "answerable_closed": sum(1 for row in positives if row["modes"][RERANK_MODE]["passed"] == 0),
+        "unanswerable": len(negatives),
+        "unanswerable_closed": sum(1 for row in negatives if row["modes"][RERANK_MODE]["passed"] == 0),
+    }
+
+
 def load_stems(connection) -> dict[str, str]:
     """Map every document id to the source file stem the golden set names it by."""
     cursor = connection.cursor()
@@ -250,20 +285,17 @@ def load_stems(connection) -> dict[str, str]:
 
 def search_modes(
     connection, text: str, modes: tuple[str, ...], depth: int, settings: Settings
-) -> dict[str, list[dict[str, Any]]]:
-    """Return the top ``depth`` hits of every requested mode for one question.
+) -> dict[str, SearchResult]:
+    """Return the top ``depth`` results of every requested mode for one question.
 
-    Full text alone runs directly and makes no API call. Any mode that needs
-    the vector branch goes through ``compare()``, which embeds once for all.
+    One ``compare()`` call serves them all, with one embedding at most; a
+    reranking failure aborts rather than scoring an empty column as a miss.
     """
-    if modes == ("fts",):
-        return {"fts": run_search(connection, text, "fts", Filters(), depth, settings).hits}
-    results = compare(connection, text, Filters(), depth, settings)
-    return {mode: results[mode].hits for mode in modes}
+    return compare(connection, text, Filters(), depth, settings, modes=modes, raise_rerank_errors=True)
 
 
 def evaluate_question(
-    question: Question, hits_by_mode: dict[str, list[dict[str, Any]]], stems: dict[str, str]
+    question: Question, results: dict[str, SearchResult], stems: dict[str, str]
 ) -> dict[str, Any]:
     """Score one question in every mode that ran."""
     row: dict[str, Any] = {
@@ -273,16 +305,27 @@ def evaluate_question(
         "negative": question.negative,
         "modes": {},
     }
-    for mode, hits in hits_by_mode.items():
+    for mode, result in results.items():
+        hits = result.hits
         ranks = evidence_ranks(hits, question, stems)
         best = hits[0].get(_SCORE_KEY[mode]) if hits else None
-        row["modes"][mode] = {
+        data: dict[str, Any] = {
             "ranks": ranks,
             "first": first_rank(ranks),
             "hits": len(hits),
             "top_score": float(best) if best is not None else None,
-            "top": [[stems.get(str(hit["document_id"]), "?"), hit["chunk_index"]] for hit in hits[:5]],
+            "top": [
+                [stems.get(str(hit["document_id"]), "?"), hit["chunk_index"], hit.get("rerank_grade")]
+                for hit in hits[:5]
+            ],
         }
+        stats = result.debug.get("rerank")
+        if stats is not None:
+            first = data["first"]
+            data["passed"] = stats["passed"]
+            data["relevant_passed"] = first is not None and first <= stats["passed"]
+            data["rerank_ms"] = stats["ms"]
+        row["modes"][mode] = data
     return row
 
 
@@ -334,9 +377,16 @@ def _rank(value: int | None) -> str:
     return "–" if value is None else str(value)
 
 
+def _top(value: float | None, mode: str) -> str:
+    if value is None:
+        return "–"
+    return f"{int(value)}/3" if mode == RERANK_MODE else f"{value:.3f}"
+
+
 def print_report(
     rows: list[dict[str, Any]],
     summary: dict[str, dict[str, dict[str, float]]],
+    gate: dict[str, Any] | None,
     modes: tuple[str, ...],
     depth: int,
     cutoffs: tuple[int, ...],
@@ -348,43 +398,51 @@ def print_report(
 
     if "all" in summary:
         print()
-        print(f"{'režim':<9}" + "".join(f"{'recall@' + str(k):>11}" for k in cutoffs) + f"{'MRR':>8}{'nenalezeno':>12}")
+        print(f"{'režim':<12}" + "".join(f"{'recall@' + str(k):>11}" for k in cutoffs) + f"{'MRR':>8}{'nenalezeno':>12}")
         for mode in modes:
             entry = summary["all"][mode]
             print(
-                f"{mode:<9}"
+                f"{mode:<12}"
                 + "".join(f"{entry[f'recall@{k}']:>11.2f}" for k in cutoffs)
                 + f"{entry['mrr']:>8.3f}{int(entry['missed']):>12}"
             )
 
         print("\nMRR podle typu otázky")
-        print(f"{'typ':<12}{'otázek':>7}" + "".join(f"{mode:>9}" for mode in modes))
+        print(f"{'typ':<12}{'otázek':>7}" + "".join(f"{mode:>12}" for mode in modes))
         for kind in QUESTION_TYPES:
             if kind in summary:
                 entries = summary[kind]
                 print(
                     f"{kind:<12}{int(entries[modes[0]]['questions']):>7}"
-                    + "".join(f"{entries[mode]['mrr']:>9.3f}" for mode in modes)
+                    + "".join(f"{entries[mode]['mrr']:>12.3f}" for mode in modes)
                 )
 
         print(f"\nPořadí prvního relevantního chunku (– = není v top {depth})")
-        print(f"{'otázka':<24}{'typ':<12}" + "".join(f"{mode:>9}" for mode in modes))
+        print(f"{'otázka':<24}{'typ':<12}" + "".join(f"{mode:>12}" for mode in modes))
         for row in positives:
             print(
                 f"{row['id']:<24}{row['type']:<12}"
-                + "".join(f"{_rank(row['modes'][mode]['first']):>9}" for mode in modes)
+                + "".join(f"{_rank(row['modes'][mode]['first']):>12}" for mode in modes)
             )
 
     if negatives:
         print("\nOtázky bez odpovědi: co vyhledávání přesto vrátí (počet výsledků / skóre prvního)")
-        print(f"{'otázka':<24}" + "".join(f"{mode:>20}" for mode in modes))
+        print(f"{'otázka':<24}" + "".join(f"{mode:>16}" for mode in modes))
         for row in negatives:
-            cells = []
-            for mode in modes:
-                data = row["modes"][mode]
-                score = "–" if data["top_score"] is None else f"{data['top_score']:.3f}"
-                cells.append(f"{data['hits']} / {score}")
-            print(f"{row['id']:<24}" + "".join(f"{cell:>20}" for cell in cells))
+            cells = [f"{row['modes'][mode]['hits']} / {_top(row['modes'][mode]['top_score'], mode)}" for mode in modes]
+            print(f"{row['id']:<24}" + "".join(f"{cell:>16}" for cell in cells))
+
+    if gate is not None:
+        print(f"\nBrána relevance: známka aspoň {gate['min_grade']} ze 3")
+        print(
+            f"  otázky s odpovědí:   relevantní chunk prošel u {gate['relevant_passed']} z {gate['answerable']},"
+            f" nic neprošlo u {gate['answerable_closed']}"
+        )
+        print(f"  otázky bez odpovědi: nic neprošlo u {gate['unanswerable_closed']} z {gate['unanswerable']}")
+        print(f"\n{'otázka':<24}{'prošlo':>8}{'první relevantní':>18}")
+        for row in rows:
+            data = row["modes"][RERANK_MODE]
+            print(f"{row['id']:<24}{data['passed']:>8}{_rank(data['first']):>18}")
     print()
 
 
@@ -418,7 +476,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true", help="Verify the golden set against the database; no API call")
     parser.add_argument("--only", nargs="+", metavar="ID", help="Evaluate only these question ids")
     parser.add_argument("--type", nargs="+", choices=QUESTION_TYPES, dest="types", help="Evaluate only these question types")
-    parser.add_argument("--modes", nargs="+", choices=MODES, default=list(MODES), help="Search modes (default: all)")
+    parser.add_argument(
+        "--modes", nargs="+", choices=ALL_MODES, default=list(MODES),
+        help="Search modes (default: fts vector hybrid; rerank calls Gemini to grade candidates)",
+    )
     parser.add_argument("--depth", type=int, default=DEPTH, help=f"Ranks examined per mode (default: {DEPTH})")
     parser.add_argument("--golden", type=Path, default=GOLDEN_PATH, help="Golden set file")
     parser.add_argument("--out", type=Path, help="JSON results file (default: processed/eval/retrieval-<time>.json)")
@@ -443,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("--depth must be at least 1")
         return 1
 
-    modes = tuple(mode for mode in MODES if mode in args.modes)
+    modes = tuple(mode for mode in ALL_MODES if mode in args.modes)
     cutoffs = tuple(sorted({k for k in CUTOFFS if k < args.depth} | {args.depth}))
     settings = load_settings()
 
@@ -462,20 +523,24 @@ def main(argv: list[str] | None = None) -> int:
         for number, question in enumerate(questions, start=1):
             logger.info("[%d/%d] %s", number, len(questions), question.id)
             try:
-                hits_by_mode = search_modes(connection, question.question, modes, args.depth, settings)
+                results = search_modes(connection, question.question, modes, args.depth, settings)
             except EmbeddingUnavailable as exc:
                 logger.error(
-                    "Could not embed %r (%s). Full text alone needs no API: re-run with --modes fts.",
+                    "Could not embed %r (%s). Full text alone needs no API: re-run with --modes fts fts_any.",
                     question.id,
                     exc,
                 )
                 return 1
-            rows.append(evaluate_question(question, hits_by_mode, stems))
+            except RerankUnavailable as exc:
+                logger.error("Could not grade the candidates of %r (%s).", question.id, exc)
+                return 1
+            rows.append(evaluate_question(question, results, stems))
     finally:
         connection.close()
 
     summary = summarize(rows, modes, cutoffs)
-    print_report(rows, summary, modes, args.depth, cutoffs)
+    gate = summarize_gate(rows)
+    print_report(rows, summary, gate, modes, args.depth, cutoffs)
 
     if not args.no_save:
         path = args.out or RESULTS_DIR / f"retrieval-{datetime.now():%Y%m%d-%H%M%S}.json"
@@ -488,7 +553,9 @@ def main(argv: list[str] | None = None) -> int:
                 "modes": list(modes),
                 "embedding_model": settings.embedding_model,
                 "embedding_dimensions": settings.embedding_dimensions,
+                "rerank_model": settings.rerank_model if RERANK_MODE in modes else None,
                 "summary": summary,
+                "gate": gate,
                 "questions": rows,
             },
         )

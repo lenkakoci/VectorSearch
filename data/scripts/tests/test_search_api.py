@@ -2,7 +2,7 @@
 
 The routes are thin: validate, call the service, serialise. These tests pin
 that contract - what reaches the service and what comes back - without a
-database. The SQL is exercised by ``check_pipeline.py`` against the corpus.
+database. The SQL is exercised against the corpus by ``eval_retrieval.py``.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import search_api
+from rerank_service import RerankUnavailable
 from search_service import EmbeddingUnavailable, SearchResult
 
 
@@ -47,10 +48,10 @@ def _hit(**overrides):
     return hit
 
 
-def _result(query, mode, limit=10, hits=None):
+def _result(query, mode, limit=10, hits=None, debug=None):
     return SearchResult(
         query=query, mode=mode, limit=limit, fetch=limit, hits=hits if hits is not None else [_hit()],
-        debug={"tsquery": {"czech": "'vrt'", "czech_literal": "'vrty'"}, "filters": ""},
+        debug=debug or {"tsquery": {"czech": "'vrt'", "czech_literal": "'vrty'"}, "filters": ""},
     )
 
 
@@ -86,6 +87,7 @@ def test_search_returns_hits_and_passes_filters(client, monkeypatch):
     assert body["mode"] == "fts"
     assert body["hits"][0]["headline"].count("<mark>") == 3
     assert body["hits"][0]["report_date"] == "2016-03-23"
+    assert body["hits"][0]["rerank_grade"] is None
     assert body["debug"]["tsquery"]["czech"] == "'vrt'"
 
     assert seen["query"] == "vrty pro tepelné čerpadlo"
@@ -112,17 +114,54 @@ def test_embedding_failure_maps_to_503(client, monkeypatch):
     assert "Fulltext" in response.json()["detail"]
 
 
-def test_compare_returns_every_mode(client, monkeypatch):
-    def fake_compare(conn, query, filters, limit, settings):
-        return {mode: _result(query, mode, limit) for mode in ("fts", "vector", "hybrid")}
+def test_rerank_failure_in_single_mode_maps_to_503(client, monkeypatch):
+    def failing(*args, **kwargs):
+        raise RerankUnavailable("ServerError: 503")
+
+    monkeypatch.setattr(search_api, "run_search", failing)
+    response = client.post("/api/search", json={"query": "voda", "mode": "rerank"})
+    assert response.status_code == 503
+    assert "Reranking" in response.json()["detail"]
+
+
+def test_compare_returns_every_mode_without_rerank_by_default(client, monkeypatch):
+    seen = {}
+
+    def fake_compare(conn, query, filters, limit, settings, **kwargs):
+        seen.update(kwargs)
+        return {mode: _result(query, mode, limit) for mode in kwargs["modes"]}
 
     monkeypatch.setattr(search_api, "compare", fake_compare)
     response = client.post("/api/compare", json={"query": "hladina podzemní vody", "limit": 5})
     assert response.status_code == 200, response.text
     body = response.json()
+    assert seen["modes"] == ("fts", "vector", "hybrid")
     assert body["query"] == "hladina podzemní vody"
-    assert set(body) == {"query", "fts", "vector", "hybrid"}
     assert body["hybrid"]["mode"] == "hybrid"
+    assert body["rerank"] is None
+
+
+def test_compare_with_rerank_adds_the_graded_column(client, monkeypatch):
+    seen = {}
+
+    def fake_compare(conn, query, filters, limit, settings, **kwargs):
+        seen.update(kwargs)
+        results = {mode: _result(query, mode, limit) for mode in kwargs["modes"]}
+        results["rerank"] = _result(
+            query, "rerank", limit,
+            hits=[_hit(rerank_grade=3, rerank_reason="Uvádí počet a hloubku vrtů.", candidate_rank=2)],
+            debug={"rerank": {"candidates": 40, "passed": 3, "min_grade": 2}},
+        )
+        return results
+
+    monkeypatch.setattr(search_api, "compare", fake_compare)
+    response = client.post("/api/compare", json={"query": "vrty pro tepelné čerpadlo", "rerank": True})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert seen["modes"] == ("fts", "vector", "hybrid", "rerank")
+    hit = body["rerank"]["hits"][0]
+    assert (hit["rerank_grade"], hit["candidate_rank"]) == (3, 2)
+    assert body["rerank"]["debug"]["rerank"]["passed"] == 3
 
 
 def test_context_validates_uuid_and_reports_missing(client, monkeypatch):

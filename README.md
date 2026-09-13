@@ -310,17 +310,29 @@ próza — nedohledaná strana stojí embedding navíc, ale nevyrobí díru v in
 
 ## Vyhledávání
 
-Tři režimy. **`fts` nevolá žádné API** — nic nestojí, nepodléhá kvótě a funguje
+Čtyři režimy. **`fts` nevolá žádné API** — nic nestojí, nepodléhá kvótě a funguje
 i bez Gemini klíče.
 
 ```powershell
 uv run python search_reports.py "hladina podzemní vody"              # vektorový (výchozí)
 uv run python search_reports.py "ČSN 75 9010" --mode fts             # jen fulltext, zdarma
 uv run python search_reports.py "hladina podzemní vody" --mode hybrid # obojí, sloučené přes RRF
+uv run python search_reports.py "Jak hluboko je voda v Lednici?" --mode rerank  # s rerankingem
 ```
 
 Skóre se liší podle režimu: `vector` ukazuje kosinovou podobnost (0–1),
-`fts` hodnotu `ts_rank`, `hybrid` skóre RRF (~0,016–0,033).
+`fts` hodnotu `ts_rank`, `hybrid` skóre RRF (~0,016–0,033) a `rerank` známku 0–3.
+
+**Reranking** vezme 40 kandidátů, po dvaceti nejlepších z vektoru a z volnějšího
+fulltextu, který nevyžaduje všechna slova dotazu. Model Gemini každému dá známku
+podle toho, jak odpovídá na otázku: 3 přímo obsahuje odpověď, 2 obsahuje její
+část, 1 jen souvisí s tématem, 0 nesouvisí. Výsledky se seřadí podle známky, při
+shodě rozhoduje pořadí RRF. Známka 2 je zároveň brána relevance pro budoucí
+generované odpovědi: co jí nedosáhne, do odpovědi nepůjde. Kandidáti se neberou
+z prvních 40 po RRF, protože fúze vytlačí úryvky, které najde jen jedna větev,
+typicky přílohy bez vektoru. Známky si běžící proces pamatuje pro dvojici dotaz
+a chunk, takže opakovaný dotaz s jiným filtrem neplatí znovu. Model nastavuje
+`GEMINI_RERANK_MODEL`, výchozí je `GEMINI_MODEL`.
 
 ### Filtrování podle metadat
 
@@ -406,15 +418,23 @@ a `frontend/Dockerfile`; API čte `data/scripts/.env`):
 
 ```powershell
 cd deploy\local
-docker compose up -d --build api frontend         # http://localhost:3001
+docker compose up -d --build --no-deps api frontend   # http://localhost:3001
 ```
+
+`--no-deps` je nutné. Bez něj Compose přestaví i obraz PostgreSQL, a pokud se
+obraz změní, vytvoří databázový kontejner znovu. Data na připojeném disku
+přežijí, ale všechna otevřená spojení spadnou.
 
 Co stránka umí:
 
-- **Režimy** Fulltext / Sémantické / Hybridní / **Porovnat** – poslední spustí
-  jeden dotaz ve všech třech režimech vedle sebe s jedním embeddingem. Úryvek,
-  který se objeví ve více sloupcích, dostane stejné písmeno; z toho je na první
-  pohled vidět, co našla jen slova, co jen význam a co obojí.
+- **Režimy** Fulltext / Sémantické / Hybridní / Reranking / **Porovnat** –
+  poslední spustí jeden dotaz v několika režimech vedle sebe s jedním
+  embeddingem. Úryvek, který se objeví ve více sloupcích, dostane stejné
+  písmeno; z toho je na první pohled vidět, co našla jen slova, co jen význam
+  a co obojí. Zaškrtnutí „+ reranking“ přidá čtvrtý sloupec: 40 kandidátů
+  ohodnocených Gemini známkou 0–3, s důvodem u každé karty a čarou pod prahem
+  relevance. Stojí jedno až dvě volání API na dotaz, proto je ve výchozím stavu
+  vypnuté.
 - **Odznaky** u každého výsledku: `slova` / `význam` / `obojí`, `bez shody slov`
   (sémantický výsledek, ve kterém není žádné hledané slovo), `příloha`.
 - **Zvýraznění** hledaných slov dělá PostgreSQL (`ts_headline` s konfigurací
@@ -455,10 +475,27 @@ uv run python eval_retrieval.py                            # jeden embedding na 
 uv run python eval_retrieval.py --modes fts --type annex   # bez volání API
 ```
 
-Výstupem je recall@5, @10, @40 a MRR pro fulltext, vektor a hybrid, rozpad
-podle typu otázky, pořadí prvního relevantního chunku u každé otázky a přehled
-toho, co vyhledávání vrací na otázky bez odpovědi. JSON se ukládá do
-`data/processed/eval/`.
+Výstupem je recall@5, @10, @40 a MRR pro každý režim, rozpad podle typu
+otázky, pořadí prvního relevantního chunku u každé otázky, přehled toho, co
+vyhledávání vrací na otázky bez odpovědi, a s rerankingem i vyhodnocení brány
+relevance. JSON se ukládá do `data/processed/eval/`. Režimy `fts_any`
+a `hybrid_any` slouží jen k měření: jde o fulltext, který nevyžaduje všechna
+slova dotazu.
+
+Stav k 13. 9. 2026, spuštěno s `--modes fts fts_any vector hybrid hybrid_any rerank`:
+
+| režim | recall@5 | recall@40 | MRR | odpověď není v top 40 |
+| --- | ---: | ---: | ---: | ---: |
+| fts | 0,04 | 0,09 | 0,06 | 31 z 34 |
+| fts_any | 0,69 | 0,88 | 0,53 | 4 z 34 |
+| vector | 0,62 | 0,83 | 0,53 | 5 z 34 |
+| hybrid | 0,66 | 0,87 | 0,54 | 4 z 34 |
+| hybrid_any | 0,69 | 0,90 | 0,54 | 3 z 34 |
+| rerank | 0,92 | 0,96 | 0,79 | 1 z 34 |
+
+Brána relevance se známkou 2 pustila relevantní úryvek u 33 z 34 otázek
+s odpovědí a u všech 6 otázek bez odpovědi nepustila nic. Ohodnocení 40
+kandidátů trvá v mediánu 6 s.
 
 Relevance se určuje podle textu ([text_match.py](data/scripts/text_match.py)
 ignoruje velikost písmen, zdvojené mezery a druh pomlčky), ne podle chunk_id,
@@ -497,7 +534,8 @@ V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez 
 | **Prozaická příloha bez formulářových stran** | ZZ_Pazderna: 34 chunků pod `6.1 SEZNAM NOREM` | hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat |
 | **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
-| **Fulltext a otázky v přirozeném jazyce** | ve zlaté sadě našel v top 40 odpověď jen u 3 z 34 otázek | `websearch_to_tsquery` vyžaduje všechna slova dotazu. Hybrid je proto téměř totéž co vektor a fakta z příloh, dosažitelná jen fulltextem, se nenajdou. Před rerankingem je potřeba volnější dotaz pro kandidáty |
+| **Reranking je nejpomalejší krok** | ohodnocení 40 kandidátů trvá v mediánu 6 s, nejdéle 13 s | dvě volání Gemini po 20 kandidátech. Zkrátit jde menšími dávkami nebo menším počtem kandidátů, vždy s kontrolou na zlaté sadě |
+| **Režim Fulltext zůstává přísný** | na otázky v přirozeném jazyce najde odpověď jen u 3 z 34 | záměr: ve Vyhledávání ukazuje limity hledání podle slov. Kandidáti pro reranking používají volnější fulltext, který nevyžaduje všechna slova |
 | **Reranker** | nenasazeno | sousední chunky už vrací API (`/api/chunks/…/context`) a UI („Kontext ±1"); reranker má smysl až po opravě sekcí |
 
 ### Na co si dát pozor

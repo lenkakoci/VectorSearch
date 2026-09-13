@@ -11,10 +11,28 @@ import { DebugPanel } from '../components/DebugPanel'
 import { FilterPanel } from '../components/FilterPanel'
 import { ResultList } from '../components/ResultList'
 import { emptyFilters, toRequestFilters } from '../lib/filters'
-import type { CompareResponse, Facets } from '../types'
+import type { CompareResponse, Facets, SearchResponse } from '../types'
 import compare from './fixtures/compare.json'
 
 const data = compare as CompareResponse
+
+// The captured hybrid column, graded as the reranker would grade it: the
+// fixture predates reranking, and grading it for real would cost an API call.
+const reranked: SearchResponse = {
+  ...data.hybrid,
+  mode: 'rerank',
+  hits: data.hybrid.hits.map((hit, index) => ({
+    ...hit,
+    rerank_grade: [3, 2, 1][index] ?? 0,
+    rerank_reason: ['Uvádí požadovaný údaj.', 'Obsahuje část odpovědi.', 'Jen souvisí s tématem.'][index] ?? 'Nesouvisí.',
+    candidate_rank: index + 2,
+  })),
+  debug: {
+    ...data.hybrid.debug,
+    fts_match: 'any',
+    rerank: { reranker: 'gemini', model: 'gemini-test', graded: 40, cached: 0, calls: 2, ms: 1500, candidates: 40, min_grade: 2, passed: 2 },
+  },
+}
 
 describe('rendering the captured response', () => {
   it('shows the three columns with the highlighted words', () => {
@@ -22,8 +40,18 @@ describe('rendering the captured response', () => {
     expect(html).toContain('Fulltext')
     expect(html).toContain('Sémantické')
     expect(html).toContain('Hybridní')
+    expect(html).not.toContain('Reranking')
     expect(html).toContain('<mark>')
     expect(html).not.toContain('&lt;mark&gt;')
+  })
+
+  it('adds the reranking column with grades and the threshold line', () => {
+    // Server rendering separates adjacent text and values with empty comments.
+    const text = renderToString(<CompareView data={{ ...data, rerank: reranked }} filters={{}} />).replace(/<!-- -->/g, '')
+    expect(text).toContain('Reranking')
+    expect(text).toContain('známka 3/3')
+    expect(text).toContain('Pod prahem relevance')
+    expect(text).toContain('2 z 40 kandidátů má známku aspoň 2')
   })
 
   it('renders a single ranking with scores and section paths', () => {
@@ -40,16 +68,17 @@ describe('rendering the captured response', () => {
     expect(html).toContain('všechna hledaná slova')
   })
 
-  it('renders the debug panel with lexemes and the request', () => {
+  it('renders the debug panel with lexemes, the request and the reranker', () => {
     const html = renderToString(
       <DebugPanel
-        state={{ status: 'ok', view: 'compare', compare: data, request: { query: data.query, limit: 3, filters: {} } }}
+        state={{ status: 'ok', view: 'compare', compare: { ...data, rerank: reranked }, request: { query: data.query, limit: 3, filters: {}, rerank: true } }}
         open
         onToggle={() => undefined}
       />,
     )
     expect(html).toContain('tsquery czech')
     expect(html).toContain(data.query)
+    expect(html).toContain('brána relevance')
   })
 
   it('renders the filter panel from facets', () => {

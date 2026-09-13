@@ -6,10 +6,16 @@ search logic lives here, so the command line and the web see the same results.
 
     GET  /api/health                                     corpus counts
     GET  /api/facets                                     values every filter can take
-    POST /api/search                                     one mode
-    POST /api/compare                                    fts, vector and hybrid side by side
+    POST /api/search                                     one mode, ``rerank`` included
+    POST /api/compare                                    fts, vector and hybrid side by side,
+                                                         and reranking when ``rerank`` is set
     GET  /api/chunks/{document_id}/{chunk_index}/context the chunks around a hit
     GET  /api/documents/{document_id}                    one report with its extraction
+
+Reranking calls Gemini for every candidate not graded before, so
+``/api/compare`` runs it only on request. A reranking failure there leaves the
+other columns intact and reports ``rerank_error`` in the rerank column's debug;
+``/api/search`` with mode ``rerank`` answers 503 instead.
 
 Inline prefixes in the query (``autor:Poul hladina vody``) work exactly as on
 the command line and win over the structured filters, so a demo can show both.
@@ -34,8 +40,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from pipeline_common import configure_logging, load_connection_params, load_settings
+from rerank_service import RerankUnavailable
 from search_filters import Filters, build_filters, parse_query
 from search_service import (
+    MODES,
+    RERANK_MODE,
     EmbeddingUnavailable,
     SearchResult,
     compare,
@@ -48,7 +57,7 @@ from search_service import (
 
 logger = logging.getLogger(__name__)
 
-Mode = Literal["fts", "vector", "hybrid"]
+Mode = Literal["fts", "vector", "hybrid", "rerank"]
 ContentKind = Literal["prose", "annex"]
 
 _DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3001"
@@ -88,18 +97,24 @@ class FiltersIn(BaseModel):
         )
 
 
-class CompareRequest(BaseModel):
-    """A query to run in every mode."""
+class QueryIn(BaseModel):
+    """A query with its limit and filters."""
 
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(10, ge=1, le=50)
     filters: FiltersIn = FiltersIn()
 
 
-class SearchRequest(CompareRequest):
+class SearchRequest(QueryIn):
     """A query to run in one mode."""
 
     mode: Mode = "hybrid"
+
+
+class CompareRequest(QueryIn):
+    """A query to run in every mode."""
+
+    rerank: bool = Field(False, description="Also grade forty hybrid candidates with Gemini; costs API calls")
 
 
 class Hit(BaseModel):
@@ -128,6 +143,9 @@ class Hit(BaseModel):
     fts_rank: int | None
     fts_score: float | None
     rrf_score: float | None
+    candidate_rank: int | None = None
+    rerank_grade: int | None = None
+    rerank_reason: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -142,12 +160,13 @@ class SearchResponse(BaseModel):
 
 
 class CompareResponse(BaseModel):
-    """The same query in every mode."""
+    """The same query in every mode; ``rerank`` only when it was requested."""
 
     query: str
     fts: SearchResponse
     vector: SearchResponse
     hybrid: SearchResponse
+    rerank: SearchResponse | None = None
 
 
 class FacetValue(BaseModel):
@@ -236,7 +255,7 @@ def connection() -> Iterator[Any]:
         conn.close()
 
 
-def _resolve(request: CompareRequest) -> tuple[str, Filters]:
+def _resolve(request: QueryIn) -> tuple[str, Filters]:
     """Split inline prefixes off the query and merge them with the form filters."""
     text, inline = parse_query(request.query)
     if not text:
@@ -261,6 +280,15 @@ def _embedding_error(exc: EmbeddingUnavailable) -> HTTPException:
         status_code=503,
         detail="Embedding dotazu není dostupný (chybí klíč nebo je vyčerpaná kvóta). "
         "Fulltextový režim funguje bez něj.",
+    )
+
+
+def _rerank_error(exc: RerankUnavailable) -> HTTPException:
+    logger.error("Reranking unavailable: %s", exc)
+    return HTTPException(
+        status_code=503,
+        detail="Reranking není dostupný (model neodpověděl nebo chybí klíč). "
+        "Hybridní režim funguje bez něj.",
     )
 
 
@@ -301,16 +329,19 @@ def search(request: SearchRequest) -> SearchResponse:
             result = run_search(conn, text, request.mode, filters, request.limit, SETTINGS)
     except EmbeddingUnavailable as exc:
         raise _embedding_error(exc) from exc
+    except RerankUnavailable as exc:
+        raise _rerank_error(exc) from exc
     return _response(result)
 
 
 @router.post("/compare", response_model=CompareResponse)
 def compare_modes(request: CompareRequest) -> CompareResponse:
-    """Run the query in every mode; one embedding request serves all three."""
+    """Run the query in every mode; one embedding request serves them all."""
     text, filters = _resolve(request)
+    modes = MODES + ((RERANK_MODE,) if request.rerank else ())
     try:
         with connection() as conn:
-            results = compare(conn, text, filters, request.limit, SETTINGS)
+            results = compare(conn, text, filters, request.limit, SETTINGS, modes=modes)
     except EmbeddingUnavailable as exc:
         raise _embedding_error(exc) from exc
     return CompareResponse(query=text, **{mode: _response(result) for mode, result in results.items()})
@@ -351,7 +382,7 @@ def create_app() -> FastAPI:
     """Build the application."""
     configure_logging()
     origins = [item.strip() for item in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if item.strip()]
-    application = FastAPI(title="VectorSearch demo API", version="0.1.0")
+    application = FastAPI(title="VectorSearch demo API", version="0.2.0")
     application.add_middleware(
         CORSMiddleware,
         allow_origins=origins,

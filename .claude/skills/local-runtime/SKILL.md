@@ -43,8 +43,10 @@ time. Stop the other one before starting this.
 3. `uv run python ingest.py` from `data/scripts` — extract, chunk, embed, import.
 4. `uv run python check_pipeline.py` — verifies every stage. Costs nothing.
 5. `uv run python search_reports.py "<dotaz>" --hybrid` to verify.
-6. Web demo, optional: `docker compose up -d --build api frontend` from
-   `deploy/local` and open http://localhost:3001. Or without Docker:
+6. Web demo, optional: `docker compose up -d --build --no-deps api frontend`
+   from `deploy/local` and open http://localhost:3001. Without `--no-deps`
+   Compose rebuilds the postgres image as a dependency and, when the image
+   changes, recreates the database container, dropping every open connection. Or without Docker:
    `uv run uvicorn search_api:app --reload --port 8010` from `data/scripts`
    and `npm run dev` from `frontend` (http://localhost:5173). Port 8010 can be
    held by only one of the two at a time.

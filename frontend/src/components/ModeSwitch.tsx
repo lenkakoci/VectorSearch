@@ -1,10 +1,10 @@
 import clsx from 'clsx'
-import { Columns3, Combine, Sparkles, Type } from 'lucide-react'
+import { Columns3, Combine, ListChecks, Sparkles, Type } from 'lucide-react'
 import { MODE_INFO } from '../lib/modes'
 import type { View } from '../types'
 
-const ICONS = { fts: Type, vector: Sparkles, hybrid: Combine, compare: Columns3 }
-const ORDER: View[] = ['fts', 'vector', 'hybrid', 'compare']
+const ICONS = { fts: Type, vector: Sparkles, hybrid: Combine, rerank: ListChecks, compare: Columns3 }
+const ORDER: View[] = ['fts', 'vector', 'hybrid', 'rerank', 'compare']
 
 interface Props {
   view: View
@@ -14,7 +14,7 @@ interface Props {
 export function ModeSwitch({ view, onChange }: Props) {
   return (
     <div className="space-y-2">
-      <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 shadow-sm" role="radiogroup">
+      <div className="inline-flex flex-wrap rounded-lg border border-slate-300 bg-white p-1 shadow-sm" role="radiogroup">
         {ORDER.map((candidate) => {
           const Icon = ICONS[candidate]
           const active = candidate === view
@@ -40,7 +40,7 @@ export function ModeSwitch({ view, onChange }: Props) {
           )
         })}
       </div>
-      <p className="text-sm text-slate-600">{MODE_INFO[view].explain}</p>
+      <p className="max-w-3xl text-sm text-slate-600">{MODE_INFO[view].explain}</p>
     </div>
   )
 }

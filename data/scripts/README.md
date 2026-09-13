@@ -47,7 +47,8 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `search_service.py` | The search itself as a library: SQL for every branch, query embedding with a cache, RRF with per-branch ranks, `ts_headline` highlights, neighbours, facets. Takes a connection, returns dicts. |
 | `search_api.py` | FastAPI over the service for the web demo (`frontend/`). Pydantic models, no search logic. Dependency group `api`, installed by default. |
 | `text_match.py` | Loose text comparison (case, doubled spaces, kinds of dash) for golden-set evidence and later for quotes in answers. No API, no database. |
-| `eval_retrieval.py` | Recall@k and MRR per search mode over `../eval/golden.yaml`. `--check` verifies the set against the database for free. |
+| `eval_retrieval.py` | Recall@k and MRR per search mode over `../eval/golden.yaml`, and the relevance gate when `rerank` runs. `--check` verifies the set against the database for free. |
+| `rerank_service.py` | Grades search candidates 0-3 with Gemini (rubric, batches of 20, per-chunk cache), orders them by grade and applies the relevance gate. Model from `GEMINI_RERANK_MODEL`. |
 
 ## Flags worth knowing
 
@@ -168,6 +169,23 @@ uv run python -c "from chunker import chunk_markdown; import pathlib; cs = chunk
 - The API container (`Dockerfile.api`) pre-fetches the tiktoken encoding at build
   time: `chunker.py` loads it at import and `pipeline_common` imports `chunker`,
   so without that the container would need the network to start.
+- Full text comes in two strengths. `fts` requires every word of the query
+  (`websearch_to_tsquery` ANDs them): exact for a code, nearly useless for a
+  question. `fts_any` and the candidates of `rerank` accept any word and rank
+  by summed BM25-style IDF, because `ts_rank` has no notion of rarity; a place
+  name then outweighs "podzemní voda". Stop words are dropped by asking the
+  `czech` configuration, the only one with a stop list.
+- The vector branch sets `hnsw.ef_search` to the number of rows it fetches,
+  local to the transaction. Today the planner scans exactly and the setting is
+  moot; once the index is used, a fetch above 40 would otherwise be cut to 40.
+- `rerank` grades 40 candidates in two parallel calls of 20: a median of 6 s
+  per query on the golden set, 4 to 13 s. Grades are cached per model, query
+  and chunk for the life of the process, so the web page re-running a query
+  with another filter pays only for chunks it has not graded yet.
+- Grades are not fully reproducible even at temperature 0: the same chunk has
+  been graded 2 in one process and 3 in another. A borderline chunk can cross
+  the gate either way, so compare evaluation runs by their totals rather than
+  by single questions.
 - `tiktoken` sizes chunks locally and is not Gemini's tokenizer, so counts are
   approximate. The 800-token target leaves ample margin under the 2048-token
   input limit of `gemini-embedding-001`.

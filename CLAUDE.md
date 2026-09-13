@@ -38,9 +38,10 @@ data/processed/chunks/<stem>.parquet     → document_chunks table
    ▼
 PostgreSQL (pgvector HNSW + tsvector GIN)
    │  search_service.py     vector, full-text or hybrid (RRF) retrieval
+   │  rerank_service.py     40 candidates graded 0-3 by Gemini; grade 2 is the gate
    │                        called by search_reports.py (CLI) and search_api.py (HTTP)
    ▼
-results with section-level citation, per-branch scores and highlights
+results with section-level citation, per-branch scores, grades and highlights
 ```
 
 `search_api.py` (FastAPI, port 8010) and `frontend/` (React) put the three modes
@@ -166,6 +167,11 @@ neither configuration works alone.
   headings must check the number against the contents-page outline.
 - **Two concurrent `--force` runs write the same files.** Run long regenerations
   in the background once, and wait for them.
+- **`docker compose up --build api frontend` rebuilds postgres too.** A
+  dependency with a `build:` section is rebuilt as well, and a changed image
+  recreates the database container mid-session: data survives on the bind
+  mount, open connections do not - an evaluation run died this way. Rebuild
+  the demo with `--no-deps`.
 
 ## Proposed next work
 
@@ -194,11 +200,21 @@ effect will be guessed again. Answer quality - faithfulness, correct refusal -
 is not measured yet; it arrives with generation.
 
 The first run (2026-09-11) found that full text answers almost nothing asked
-as a question: 3 of 34 in its top 40. `websearch_to_tsquery` ANDs every term,
-so a natural-language question rarely has all its words in one chunk. Hybrid
-is therefore close to vector alone, and annex facts - reachable only by full
-text, because annex chunks carry no vector - go unfound. A looser full-text
-query for candidate generation belongs in front of the reranker.
+as a question - 3 of 34 in its top 40 - because `websearch_to_tsquery` ANDs
+every term. The fix is an any-word full text ranked by IDF (`fts_any`), which
+alone reaches 0.88 recall@40, with `rerank` on top of it (2026-09-13):
+
+| mode | recall@5 | recall@40 | MRR | answer not in top 40 |
+| --- | ---: | ---: | ---: | ---: |
+| hybrid | 0.66 | 0.87 | 0.54 | 4 of 34 |
+| rerank | 0.92 | 0.96 | 0.79 | 1 of 34 |
+
+The gate (grade 2) let a relevant chunk through for 33 of 34 answerable
+questions and nothing through for all 6 unanswerable ones. Candidates are the
+twenty best of each branch, not the fused top 40: the fusion starved chunks
+only full text finds, annex chunks above all, and cost two answers. Grading
+takes a median of 6 s per query - two Gemini calls of 20 candidates - and is
+the slowest step; it is the next thing to shorten.
 
 **3. Split bundles into their sub-reports.** Largest open structural issue.
 `GF_P188240_ZZ Sedmirohé 10 sond` is eleven reports under one cover (sub-report

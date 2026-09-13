@@ -1,9 +1,11 @@
 """Search the imported reports from the command line.
 
-Three modes, chosen with ``--mode``: ``vector`` (default), ``fts`` (no API call
-at all) and ``hybrid`` (both, merged by Reciprocal Rank Fusion). The modes, the
-queries and the scores are documented in ``search_service.py``, which does the
-work; this file only parses arguments and prints.
+Modes, chosen with ``--mode``: ``vector`` (default), ``fts`` (no API call at
+all), ``hybrid`` (both, merged by Reciprocal Rank Fusion) and ``rerank``
+(forty hybrid candidates graded 0-3 by Gemini and reordered by grade). The
+modes, the queries and the scores are documented in ``search_service.py`` and
+``rerank_service.py``, which do the work; this file only parses arguments and
+prints.
 
 Every mode can be restricted by metadata, either inline or as flags:
 
@@ -19,6 +21,7 @@ and for why the clause is never built out of user text.
 Run from data/scripts:
     uv run python search_reports.py "hladina podzemni vody"
     uv run python search_reports.py "unosnost zakladove spary" --hybrid --limit 5
+    uv run python search_reports.py "Jak hluboko je voda v Lednici?" --mode rerank
 """
 
 from __future__ import annotations
@@ -31,9 +34,11 @@ from typing import Any
 import psycopg2
 
 from pipeline_common import configure_logging, load_connection_params, load_settings
+from rerank_service import MAX_GRADE, RerankUnavailable
 from search_filters import CONTENT_KINDS, Filters, build_filters, parse_query
 from search_service import (
     MODES,
+    RERANK_MODE,
     EmbeddingUnavailable,
     list_documents,
     run_search,
@@ -41,11 +46,22 @@ from search_service import (
 
 logger = logging.getLogger(__name__)
 
+CLI_MODES = MODES + (RERANK_MODE,)
+
 _SCORE_KEY = {"vector": "vector_score", "fts": "fts_score", "hybrid": "rrf_score"}
-_HEADER = {"vector": "Vektorove", "fts": "Fulltextove", "hybrid": "Hybridni"}
+_HEADER = {"vector": "Vektorove", "fts": "Fulltextove", "hybrid": "Hybridni", "rerank": "Rerankovane"}
 
 
-def render(rows: list[dict[str, Any]], score_key: str) -> None:
+def _score(row: dict[str, Any], mode: str) -> str:
+    """Return the score a result is ranked by, as printed."""
+    if mode == RERANK_MODE:
+        grade = row.get("rerank_grade")
+        return "bez znamky" if grade is None else f"znamka {grade}/{MAX_GRADE}"
+    value = row.get(_SCORE_KEY[mode])
+    return "-" if value is None else f"{value:.4f}"
+
+
+def render(rows: list[dict[str, Any]], mode: str) -> None:
     """Print search results."""
     if not rows:
         print("Zadna shoda.")
@@ -58,9 +74,11 @@ def render(rows: list[dict[str, Any]], score_key: str) -> None:
             if row.get("page_to") and row["page_to"] != row["page_from"]:
                 pages = f", s. {row['page_from']}-{row['page_to']}"
         text = row.get("snippet") or ""
-        print(f"\n{position}. [{row[score_key]:.4f}] {row.get('title') or '(bez nazvu)'}")
+        print(f"\n{position}. [{_score(row, mode)}] {row.get('title') or '(bez nazvu)'}")
         kind = " | PŘÍLOHA" if row.get("content_kind") == "annex" else ""
         print(f"   sekce: {location}{pages} | chunk #{row['chunk_index']}{kind}")
+        if mode == RERANK_MODE:
+            print(f"   reranker: {row.get('rerank_reason') or '-'} | kandidat #{row.get('candidate_rank')}")
         print(f"   {text[:220]}...")
     print()
 
@@ -87,8 +105,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("query", nargs="?", default="", help="Search query")
     parser.add_argument(
         "--mode",
-        choices=MODES,
-        help="vector (default), fts (no API call), or hybrid",
+        choices=CLI_MODES,
+        help="vector (default), fts (no API call), hybrid, or rerank (grades candidates with Gemini)",
     )
     parser.add_argument(
         "--hybrid", action="store_true", help="Alias for --mode hybrid"
@@ -173,13 +191,23 @@ def main(argv: list[str] | None = None) -> int:
                 exc,
             )
             return 1
+        except RerankUnavailable as exc:
+            logger.error("Could not grade the candidates (%s). --mode hybrid needs no grading.", exc)
+            return 1
 
         if mode == "hybrid":
             print(
                 f"  vektorove: {result.debug.get('vector_candidates', 0)} kandidatu"
                 f" | full-text: {result.debug.get('fts_candidates', 0)} kandidatu"
             )
-        render(result.hits, _SCORE_KEY[mode])
+        elif mode == RERANK_MODE:
+            stats = result.debug.get("rerank", {})
+            print(
+                f"  kandidatu: {stats.get('candidates', 0)}"
+                f" | se znamkou >= {stats.get('min_grade')}: {stats.get('passed', 0)}"
+                f" | {stats.get('model')}: {stats.get('calls', 0)} volani, {stats.get('ms', 0)} ms"
+            )
+        render(result.hits, mode)
         return 0
     finally:
         connection.close()
