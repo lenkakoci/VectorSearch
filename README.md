@@ -397,9 +397,11 @@ cokoli odvozovat.
 
 ## Webové rozhraní
 
-Demo pro ukázku rozdílu mezi hledáním podle slov a podle významu. Stejná logika
-jako v CLI: `search_service.py` volá `search_reports.py` i `search_api.py`, nic
-se neduplikuje.
+Dvě záložky nad stejnými filtry: **Vyhledávání** ukáže rozdíl mezi hledáním
+podle slov a podle významu, **Zeptat se dokumentů** složí z nalezených úryvků
+odpověď a u každé věty nechá zdroj. Stejná logika jako v CLI:
+`search_service.py` volá `search_reports.py` i `search_api.py`, `answer_service.py`
+pak `ask_reports.py` i `/api/answer`, nic se neduplikuje.
 
 ```
 frontend/ (React, port 5173 / v Dockeru 3001)
@@ -452,18 +454,38 @@ Co stránka umí:
   konfiguracích, SQL a parametry filtrů, časy, počty kandidátů, tabulka
   pořadí × skóre.
 
+Záložka **Zeptat se dokumentů** k tomu přidává:
+
+- **Odpověď se stavem**: Odpovězeno, Částečně, Nedostatek podkladů, nebo
+  Bez podkladů, když branou relevance neprošel žádný kandidát a model se vůbec
+  nevolal. Pod odpovědí je souhrn „ověřeno X z Y vět“.
+- **Citace u každé věty**: číslo zdroje jako tlačítko. Klik sjede na kartu
+  zdroje a zvýrazní v ní citát, který server ověřil. Věta, která kontrolou
+  neprošla, je podtržená vlnovkou s vysvětlením proč.
+- **Zdroje**: citované rozbalené, ostatní sbalené. Karta nese známku od
+  rerankeru, roli (`nalezeno`, `kontext`, `pod prahem`), sekci, stranu, chunk,
+  metadata, kontext ±1 a údaje o dokumentu.
+- **Ve zdrojích chybí** a **Rozpory mezi zdroji**, když je model vyplní.
+- **Expert: průběh odpovědi** (sbalený): kroky Dotaz → Fulltext → Vektor →
+  Výběr kandidátů → Reranking → Brána → Kontext → Odpověď → Kontrola s počty
+  a časy, k tomu přesný prompt a surová odpověď modelu před kontrolou.
+- **Nastavení**: počet zdrojů, minimální známka a sousední úryvky. Změna filtru
+  odpověď nepřegeneruje — každá odpověď stojí volání modelu.
+
 Ukázkové dotazy jsou v poli jako tlačítka: `hladina podzemní vody` (najdou
 všechny tři), `vrty pro tepelné čerpadlo` (skloňování), `kde je voda blízko pod
 povrchem` (jen význam), `ČSN 75 9010` (jen slova), `sonda S-2` s filtrem
 příloh (jen fulltext, přílohy nemají vektor).
 
 API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
-`/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`) má OpenAPI na
+`POST /api/answer`, `/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`)
+má OpenAPI na
 `http://localhost:8010/docs`. Nemá autentizaci a v Compose je jen na
 `127.0.0.1` – posudky jsou interní.
 
-Testy: `uv run pytest` v `data/scripts` (filtry, fúze, API bez databáze),
-`npm test` ve `frontend` (render nad odpovědí zachycenou z API).
+Testy: `uv run pytest` v `data/scripts` (filtry, fúze, kontext, citace, API bez
+databáze), `npm test` ve `frontend` (render nad hledáním i nad odpovědí
+zachycenou z API, včetně otázky bez podkladů).
 
 ## Měření kvality vyhledávání
 
@@ -536,8 +558,8 @@ výběr důkazů, jedno volání modelu a strojová kontrola odpovědi.
 
 Přes API: `POST /api/answer` s tělem `{"question": "…", "filters": {…},
 "options": {…}}`. Vrací věty s citacemi, zdroje s příznakem `cited`, chybějící
-údaje, rozpory mezi zdroji a trace celého průběhu. Webové rozhraní pro
-odpovědi přijde v další fázi.
+údaje, rozpory mezi zdroji a trace celého průběhu. Ve webovém rozhraní je to
+záložka „Zeptat se dokumentů“, popsaná níž.
 
 Kvalitu odpovědí měří `eval_answers.py` nad stejnou zlatou sadou: jestli
 odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém

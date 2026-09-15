@@ -181,3 +181,124 @@ export interface Health {
   chunks: number
   chunks_with_vector: number
 }
+
+// --- Answers -----------------------------------------------------------------
+// Mirrors AnswerResponse in data/scripts/search_api.py. `no_evidence` never
+// comes from the model: it is what the server returns when no candidate
+// reached the relevance gate and nothing was generated at all.
+
+export type AnswerStatus = 'answered' | 'partial' | 'insufficient' | 'no_evidence'
+
+export type CheckResult = 'verified' | 'invalid_source' | 'unsupported' | 'quote_not_found' | 'number_unsupported'
+
+export interface CheckedStatement {
+  text: string
+  source_ids: number[]
+  quotes: string[]
+  check: CheckResult
+  note: string
+}
+
+export interface AnswerConflict {
+  topic: string
+  source_ids: number[]
+  description: string
+}
+
+export interface AnswerSource {
+  id: number
+  role: string
+  cited: boolean
+  chunk_id: string
+  document_id: string
+  chunk_index: number
+  section: string | null
+  content_kind: string
+  page_from: number | null
+  page_to: number | null
+  chunk_raw: string
+  title: string | null
+  municipality: string | null
+  report_type: string | null
+  report_date: string | null
+  organization: string | null
+  token_count: number | null
+  rerank_grade: number | null
+  rerank_reason: string | null
+  candidate_rank: number | null
+}
+
+export interface GateTrace {
+  min_grade: number
+  candidates: number
+  passed: number
+}
+
+export interface ContextTrace {
+  candidates: number
+  eligible: number
+  chosen: number
+  documents: number
+  tokens: number
+  dropped_below_gate: number
+  dropped_over_budget: number
+  dropped_per_document: number
+  neighbours: number
+  sources: number
+}
+
+export interface GenerationTrace {
+  model: string
+  prompt_version: number
+  ms: number
+  model_status: string
+}
+
+export interface ValidationTrace {
+  statements: number
+  verified: number
+  flagged: number
+  checks: Record<CheckResult, number>
+  cited_sources: number[]
+}
+
+export interface AnswerTrace {
+  retrieval?: SearchDebug
+  rerank?: RerankStats | null
+  gate?: GateTrace
+  context?: ContextTrace
+  generation?: GenerationTrace
+  validation?: ValidationTrace
+  total_ms?: number
+  prompt?: string
+  raw_answer?: unknown
+  [key: string]: unknown
+}
+
+export interface AnswerOptions {
+  candidates?: number
+  min_grade?: number
+  max_sources?: number
+  per_document?: number
+  token_budget?: number
+  neighbours?: boolean
+  trace?: boolean
+}
+
+export interface AnswerRequest {
+  question: string
+  filters: RequestFilters
+  options?: AnswerOptions
+}
+
+export interface AnswerResponse {
+  question: string
+  status: AnswerStatus
+  statements: CheckedStatement[]
+  missing: string[]
+  conflicts: AnswerConflict[]
+  sources: AnswerSource[]
+  model: string
+  prompt_version: number
+  trace: AnswerTrace
+}

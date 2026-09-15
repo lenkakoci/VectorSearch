@@ -1,4 +1,6 @@
 import type {
+  AnswerRequest,
+  AnswerResponse,
   CompareRequest,
   CompareResponse,
   ContextResponse,
@@ -44,6 +46,7 @@ export const api = {
   facets: () => request<Facets>('/facets'),
   search: (body: SearchRequest) => post<SearchResponse>('/search', body),
   compare: (body: CompareRequest) => post<CompareResponse>('/compare', body),
+  answer: (body: AnswerRequest) => post<AnswerResponse>('/answer', body),
   context: (documentId: string, chunkIndex: number, before = 1, after = 1) =>
     request<ContextResponse>(`/chunks/${documentId}/${chunkIndex}/context?before=${before}&after=${after}`),
   document: (documentId: string) => request<DocumentDetail>(`/documents/${documentId}`),

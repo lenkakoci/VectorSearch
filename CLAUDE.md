@@ -49,10 +49,11 @@ an answer whose every sentence carries a quote found in the chunk it cites,
 or no answer at all when nothing reached the gate (ask_reports.py, /api/answer)
 ```
 
-`search_api.py` (FastAPI, port 8010) and `frontend/` (React) put the three modes
-side by side for demonstrations. Neither contains search logic; both sit on
-`search_service.py`, so a change there is the only way to change what the CLI,
-the API and the page return. `deploy/local/docker-compose.yml` runs both next to
+`search_api.py` (FastAPI, port 8010) and `frontend/` (React) put the modes side
+by side for demonstrations and, in the second tab, answer a question with its
+sources. Neither contains search logic; both sit on `search_service.py`, so a
+change there is the only way to change what the CLI, the API and the page
+return. `deploy/local/docker-compose.yml` runs both next to
 PostgreSQL, bound to loopback: the API has no authentication and the reports are
 internal.
 
