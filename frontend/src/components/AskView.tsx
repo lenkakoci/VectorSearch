@@ -40,6 +40,9 @@ export function AskView({ state, expertOpen, onExpert }: Props) {
       <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
         {state.error}
         {state.error?.startsWith('503') && <span className="ml-1">Generování je dočasně nedostupné, vyhledávání funguje dál.</span>}
+        {(state.error?.startsWith('504') || state.error?.startsWith('502')) && (
+          <span className="ml-1">Odpověď se nestihla vrátit včas. Model bývá pomalý nárazově, zkuste otázku poslat znovu.</span>
+        )}
       </div>
     )
   }

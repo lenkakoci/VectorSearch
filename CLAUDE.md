@@ -178,6 +178,11 @@ neither configuration works alone.
   recreates the database container mid-session: data survives on the bind
   mount, open connections do not - an evaluation run died this way. Rebuild
   the demo with `--no-deps`.
+- **A 504 on the demo page is the proxy, not the API.** An answer is normally
+  10-30 s but a slow Gemini call has taken over two minutes, and nginx used to
+  give up at 120 s while the API went on to finish the answer. `frontend/nginx.conf`
+  waits 300 s for `/api/`; a timeout that is shorter than the chain behind it
+  looks exactly like a broken endpoint.
 - **A citation check is only as good as the text it compares.** The first run
   over the golden set flagged correct answers three ways, all of them in
   `citation_check.py`: an annex table's space-separated cells were fused into
