@@ -1,0 +1,273 @@
+"""Answer a question from the reports, with every sentence tied to a source.
+
+The chain: hybrid retrieval with the any-word full text, reranking by grade,
+the relevance gate, context building, one model call, and a deterministic
+check of what came back. Every step leaves its numbers in the trace, so a demo
+can show where search ends and generation begins.
+
+Nothing is answered without evidence. When no candidate reaches the gate the
+model is not called at all: the result is ``no_evidence`` with the best
+candidates attached, which is both the honest answer and the cheap one.
+
+Statuses the caller sees:
+
+    answered      every sentence carries a quote that was found in its source
+    partial       the model answered part of it, or a sentence failed a check
+    insufficient  the sources do not answer the question
+    no_evidence   nothing reached the relevance gate; the model never ran
+
+The command line (``ask_reports.py``) and the API (``search_api.py``) both
+call ``answer()``, so they cannot drift apart. Costs per question: one query
+embedding, up to two grading calls for candidates not graded before, and one
+answering call.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from google.genai import types
+from pydantic import ValidationError
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from answer_prompts import ANSWER_INSTRUCTIONS, PROMPT_VERSION, GroundedAnswer
+from citation_check import check_answer, final_status
+from context_builder import (
+    MAX_NEIGHBOURS,
+    MAX_SOURCES,
+    PER_DOCUMENT,
+    TOKEN_BUDGET,
+    build_context,
+    reaches_gate,
+)
+from gemini_auth import create_gemini_client, is_retryable_error
+from pipeline_common import Settings, load_settings
+from rerank_service import MIN_GRADE, Reranker
+from search_filters import Filters
+from search_service import CANDIDATES, RERANK_MODE, SearchResult, compare, neighbours
+
+logger = logging.getLogger(__name__)
+
+NO_EVIDENCE = "no_evidence"
+BELOW_GATE_ROLE = "pod prahem"
+FALLBACK_SOURCES = 5
+
+
+class AnswerUnavailable(RuntimeError):
+    """The answering model could not be reached or answered unusably."""
+
+
+@dataclass
+class AnswerResult:
+    """One answered question: the sentences, their sources and how it was produced."""
+
+    question: str
+    status: str
+    statements: list[dict[str, Any]]
+    missing: list[str]
+    conflicts: list[dict[str, Any]]
+    sources: list[dict[str, Any]]
+    model: str
+    prompt_version: int
+    trace: dict[str, Any] = field(default_factory=dict)
+
+
+@retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    retry=retry_if_exception(is_retryable_error),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def call_model(model: str, prompt: str) -> GroundedAnswer:
+    """Ask the model for a grounded answer.
+
+    Raises:
+        ValueError: When the answer is not the requested JSON.
+    """
+    client = create_gemini_client()
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=ANSWER_INSTRUCTIONS,
+            response_mime_type="application/json",
+            response_schema=GroundedAnswer,
+            # An answer must be reproducible, not creative.
+            temperature=0.0,
+            # No tools are offered; left on, the SDK warns on every call.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        ),
+    )
+    parsed = response.parsed
+    if isinstance(parsed, GroundedAnswer):
+        return parsed
+    try:
+        return GroundedAnswer.model_validate_json(response.text or "")
+    except ValidationError as exc:
+        raise ValueError(f"Model returned unparsable output: {(response.text or '')[:200]!r}") from exc
+
+
+def _fallback_sources(hits: list[dict[str, Any]], count: int = FALLBACK_SOURCES) -> list[dict[str, Any]]:
+    """Return the best candidates that did not reach the gate, for the user to judge."""
+    sources = []
+    for number, hit in enumerate(hits[:count], start=1):
+        source = dict(hit)
+        source["id"] = number
+        source["role"] = BELOW_GATE_ROLE
+        source["cited"] = False
+        sources.append(source)
+    return sources
+
+
+def _retrieval_trace(search: SearchResult) -> dict[str, Any]:
+    """Keep the parts of the search debug that explain the answer."""
+    wanted = (
+        "fetch",
+        "filters",
+        "filter_sql",
+        "query_words",
+        "tsquery",
+        "embed_ms",
+        "embedding_cached",
+        "vector_ms",
+        "vector_candidates",
+        "fts_any_ms",
+        "fts_any_candidates",
+    )
+    return {key: search.debug[key] for key in wanted if key in search.debug}
+
+
+def answer(
+    connection,
+    question: str,
+    filters: Filters | None = None,
+    *,
+    settings: Settings | None = None,
+    reranker: Reranker | None = None,
+    candidates: int = CANDIDATES,
+    min_grade: int = MIN_GRADE,
+    max_sources: int = MAX_SOURCES,
+    token_budget: int = TOKEN_BUDGET,
+    per_document: int = PER_DOCUMENT,
+    max_neighbours: int = MAX_NEIGHBOURS,
+    use_neighbours: bool = True,
+    keep_prompt: bool = True,
+) -> AnswerResult:
+    """Answer one question from the corpus.
+
+    Raises:
+        ValueError: On an empty question.
+        EmbeddingUnavailable: When the query cannot be embedded.
+        RerankUnavailable: When the candidates cannot be graded.
+        AnswerUnavailable: When the answering model cannot be reached.
+    """
+    question = " ".join(question.split())
+    if not question:
+        raise ValueError("Nothing to ask")
+    settings = settings or load_settings()
+    started = time.perf_counter()
+
+    search = compare(
+        connection,
+        question,
+        filters or Filters(),
+        candidates,
+        settings,
+        modes=(RERANK_MODE,),
+        reranker=reranker,
+        raise_rerank_errors=True,
+    )[RERANK_MODE]
+    hits = search.hits
+    passed = [hit for hit in hits if reaches_gate(hit, min_grade)]
+
+    trace: dict[str, Any] = {
+        "retrieval": _retrieval_trace(search),
+        "rerank": search.debug.get("rerank"),
+        "gate": {"min_grade": min_grade, "candidates": len(hits), "passed": len(passed)},
+    }
+
+    if not passed:
+        logger.info("Gate closed for %r: no candidate reached grade %d", question, min_grade)
+        trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
+        return AnswerResult(
+            question=question,
+            status=NO_EVIDENCE,
+            statements=[],
+            missing=[],
+            conflicts=[],
+            sources=_fallback_sources(hits),
+            model=settings.answer_model,
+            prompt_version=PROMPT_VERSION,
+            trace=trace,
+        )
+
+    fetch = None
+    if use_neighbours:
+        def fetch(document_id: str, chunk_index: int) -> list[dict[str, Any]]:
+            return neighbours(connection, document_id, chunk_index, 1, 1)
+
+    context = build_context(
+        question,
+        hits,
+        fetch,
+        min_grade=min_grade,
+        max_sources=max_sources,
+        token_budget=token_budget,
+        per_document=per_document,
+        max_neighbours=max_neighbours,
+    )
+    trace["context"] = context.stats
+
+    started_model = time.perf_counter()
+    try:
+        raw = call_model(settings.answer_model, context.prompt)
+    except Exception as exc:  # noqa: BLE001 - every cause has the same remedy
+        raise AnswerUnavailable(f"{type(exc).__name__}: {exc}") from exc
+    generation_ms = round((time.perf_counter() - started_model) * 1000, 1)
+
+    statements, summary = check_answer(
+        [statement.model_dump() for statement in raw.statements], context.sources
+    )
+    status = final_status(raw.status, statements)
+    known = {int(source["id"]) for source in context.sources}
+    conflicts = [
+        {**conflict.model_dump(), "source_ids": [value for value in conflict.source_ids if value in known]}
+        for conflict in raw.conflicts
+    ]
+
+    cited = set(summary["cited_sources"])
+    sources = [{**source, "cited": int(source["id"]) in cited} for source in context.sources]
+
+    trace["generation"] = {
+        "model": settings.answer_model,
+        "prompt_version": PROMPT_VERSION,
+        "ms": generation_ms,
+        "model_status": raw.status,
+    }
+    trace["validation"] = summary
+    trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    if keep_prompt:
+        trace["prompt"] = context.prompt
+        trace["raw_answer"] = raw.model_dump()
+
+    return AnswerResult(
+        question=question,
+        status=status,
+        statements=statements,
+        missing=[str(item) for item in raw.missing],
+        conflicts=conflicts,
+        sources=sources,
+        model=settings.answer_model,
+        prompt_version=PROMPT_VERSION,
+        trace=trace,
+    )

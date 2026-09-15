@@ -315,6 +315,52 @@ def build_filters(**raw: Any) -> Filters:
     return Filters(**values)
 
 
+def add_filter_arguments(parser: Any) -> None:
+    """Add the metadata filter flags to a command line parser.
+
+    Shared by ``search_reports.py`` and ``ask_reports.py`` so both tools speak
+    the same vocabulary as the inline prefixes.
+    """
+    group = parser.add_argument_group("filters (also usable inline as autor:Poul)")
+    group.add_argument("--autor", "--author", dest="author")
+    group.add_argument("--klient", "--client", dest="client")
+    group.add_argument("--lokalita", "--locality", dest="locality")
+    group.add_argument("--obec", "--municipality", dest="municipality")
+    group.add_argument("--typ", "--type", dest="report_type")
+    group.add_argument("--org", dest="organization")
+    group.add_argument("--od", "--from", dest="date_from", help="YYYY, YYYY-MM or YYYY-MM-DD")
+    group.add_argument("--do", "--to", dest="date_to", help="YYYY, YYYY-MM or YYYY-MM-DD")
+    group.add_argument(
+        "--document", action="append", dest="document_ids",
+        help="Restrict to this document UUID. Repeatable.",
+    )
+    group.add_argument(
+        "--kind", "--druh", dest="content_kind", choices=CONTENT_KINDS,
+        help="prose = report body, annex = borehole logs and forms (no vector, full text only)",
+    )
+
+
+def filters_from_query_and_args(query: str, args: Any) -> tuple[str, Filters]:
+    """Return the search text and the filters from both inline prefixes and flags.
+
+    A prefix typed inline wins over a flag, as ``merge`` documents.
+    """
+    text, inline = parse_query(query)
+    flags = build_filters(
+        author=args.author,
+        client=args.client,
+        locality=args.locality,
+        municipality=args.municipality,
+        report_type=args.report_type,
+        organization=args.organization,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        document_ids=args.document_ids,
+        content_kind=args.content_kind,
+    )
+    return text, inline.merge(flags)
+
+
 def parse_query(text: str) -> tuple[str, Filters]:
     """Split ``field:value`` prefixes off a query string.
 

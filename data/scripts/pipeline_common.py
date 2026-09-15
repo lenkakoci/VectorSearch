@@ -59,9 +59,11 @@ class Settings:
     chunk_overlap_tokens: int
     chunk_min_tokens: int
     contextualize: bool
-    # Grades search candidates (rerank_service.py). Not part of pipeline_config:
-    # it changes no stored artefact.
+    # Grades search candidates (rerank_service.py) and writes grounded answers
+    # (answer_service.py). Not part of pipeline_config: neither changes a
+    # stored artefact.
     rerank_model: str = ""
+    answer_model: str = ""
 
     def pipeline_config(self) -> PipelineConfig:
         """Return the parameter set whose change forces re-processing."""
@@ -107,6 +109,7 @@ def load_settings() -> Settings:
         chunk_min_tokens=int(os.getenv("CHUNK_MIN_TOKENS", "150")),
         contextualize=_truthy(os.getenv("CONTEXTUALIZE_CHUNKS"), True),
         rerank_model=os.getenv("GEMINI_RERANK_MODEL") or os.getenv("GEMINI_MODEL", "gemini-3.7-flash"),
+        answer_model=os.getenv("GEMINI_ANSWER_MODEL") or os.getenv("GEMINI_MODEL", "gemini-3.7-flash"),
     )
 
 

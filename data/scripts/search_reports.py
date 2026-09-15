@@ -7,6 +7,8 @@ modes, the queries and the scores are documented in ``search_service.py`` and
 ``rerank_service.py``, which do the work; this file only parses arguments and
 prints.
 
+For an answer rather than passages, see ``ask_reports.py``.
+
 Every mode can be restricted by metadata, either inline or as flags:
 
     search_reports.py "autor:Poul obec:Lednice hladina vody" --mode hybrid
@@ -35,7 +37,7 @@ import psycopg2
 
 from pipeline_common import configure_logging, load_connection_params, load_settings
 from rerank_service import MAX_GRADE, RerankUnavailable
-from search_filters import CONTENT_KINDS, Filters, build_filters, parse_query
+from search_filters import Filters, add_filter_arguments, filters_from_query_and_args
 from search_service import (
     MODES,
     RERANK_MODE,
@@ -116,43 +118,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="List the documents matching the filter instead of searching their text",
     )
     parser.add_argument("--limit", type=int, default=5, help="Number of results (default: 5)")
-
-    group = parser.add_argument_group("filters (also usable inline as autor:Poul)")
-    group.add_argument("--autor", "--author", dest="author")
-    group.add_argument("--klient", "--client", dest="client")
-    group.add_argument("--lokalita", "--locality", dest="locality")
-    group.add_argument("--obec", "--municipality", dest="municipality")
-    group.add_argument("--typ", "--type", dest="report_type")
-    group.add_argument("--org", dest="organization")
-    group.add_argument("--od", "--from", dest="date_from", help="YYYY, YYYY-MM or YYYY-MM-DD")
-    group.add_argument("--do", "--to", dest="date_to", help="YYYY, YYYY-MM or YYYY-MM-DD")
-    group.add_argument(
-        "--document", action="append", dest="document_ids",
-        help="Restrict to this document UUID. Repeatable.",
-    )
-    group.add_argument(
-        "--kind", "--druh", dest="content_kind", choices=CONTENT_KINDS,
-        help="prose = report body, annex = borehole logs and forms (no vector, full text only)",
-    )
+    add_filter_arguments(parser)
     return parser.parse_args(argv)
 
 
 def resolve_filters(args: argparse.Namespace) -> tuple[str, Filters]:
     """Return the search text and the filters from both prefixes and flags."""
-    text, inline = parse_query(args.query)
-    flags = build_filters(
-        author=args.author,
-        client=args.client,
-        locality=args.locality,
-        municipality=args.municipality,
-        report_type=args.report_type,
-        organization=args.organization,
-        date_from=args.date_from,
-        date_to=args.date_to,
-        document_ids=args.document_ids,
-        content_kind=args.content_kind,
-    )
-    return text, inline.merge(flags)
+    return filters_from_query_and_args(args.query, args)
 
 
 def main(argv: list[str] | None = None) -> int:

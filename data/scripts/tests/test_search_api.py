@@ -1,4 +1,4 @@
-"""Tests for the HTTP layer, with the search service replaced.
+"""Tests for the HTTP layer, with the services replaced.
 
 The routes are thin: validate, call the service, serialise. These tests pin
 that contract - what reaches the service and what comes back - without a
@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import search_api
+from answer_service import AnswerResult, AnswerUnavailable
 from rerank_service import RerankUnavailable
 from search_service import EmbeddingUnavailable, SearchResult
 
@@ -38,6 +39,7 @@ def _hit(**overrides):
         "report_type": "hydrogeologický průzkum",
         "report_date": date(2016, 3, 23),
         "locality": "Roudno",
+        "token_count": 120,
         "vector_rank": None,
         "vector_score": None,
         "fts_rank": 1,
@@ -48,10 +50,61 @@ def _hit(**overrides):
     return hit
 
 
+def _source(**overrides):
+    source = {
+        "id": 1,
+        "role": "nalezeno",
+        "cited": True,
+        "chunk_id": "9d4a9a1e-1111-4111-8111-111111111111",
+        "document_id": "30804a28-36a8-5080-b306-a2c737f7cd47",
+        "chunk_index": 38,
+        "section": "HG POSUDEK > 5.1",
+        "content_kind": "prose",
+        "page_from": 14,
+        "page_to": None,
+        "chunk_raw": "cca 12 ks hlubokých vrtů o předpokládané hloubce okolo 80 m",
+        "title": "ROUDNO – HG POSUDEK",
+        "municipality": "Roudno",
+        "report_type": "hydrogeologický průzkum",
+        "report_date": date(2016, 3, 23),
+        "organization": "UNIGEO, a.s.",
+        "token_count": 120,
+        "rerank_grade": 3,
+        "rerank_reason": "Uvádí počet a hloubku vrtů.",
+        "candidate_rank": 1,
+    }
+    source.update(overrides)
+    return source
+
+
 def _result(query, mode, limit=10, hits=None, debug=None):
     return SearchResult(
         query=query, mode=mode, limit=limit, fetch=limit, hits=hits if hits is not None else [_hit()],
         debug=debug or {"tsquery": {"czech": "'vrt'", "czech_literal": "'vrty'"}, "filters": ""},
+    )
+
+
+def _answer_result(status="answered", statements=None, sources=None, trace=None):
+    return AnswerResult(
+        question="Kolik vrtů se navrhuje?",
+        status=status,
+        statements=statements
+        if statements is not None
+        else [
+            {
+                "text": "Navrženo je cca 12 ks vrtů.",
+                "source_ids": [1],
+                "quotes": ["cca 12 ks hlubokých vrtů"],
+                "check": "verified",
+                "note": "citát i čísla ověřeny ve zdroji",
+            }
+        ],
+        missing=["průměr vrtů"],
+        conflicts=[],
+        sources=sources if sources is not None else [_source()],
+        model="gemini-test",
+        prompt_version=1,
+        trace=trace or {"gate": {"min_grade": 2, "candidates": 40, "passed": 3}},
     )
 
 
@@ -162,6 +215,72 @@ def test_compare_with_rerank_adds_the_graded_column(client, monkeypatch):
     hit = body["rerank"]["hits"][0]
     assert (hit["rerank_grade"], hit["candidate_rank"]) == (3, 2)
     assert body["rerank"]["debug"]["rerank"]["passed"] == 3
+
+
+def test_answer_returns_checked_statements_and_passes_options(client, monkeypatch):
+    seen = {}
+
+    def fake_answer(conn, question, filters, **kwargs):
+        seen.update(question=question, filters=filters, **kwargs)
+        return _answer_result()
+
+    monkeypatch.setattr(search_api, "answer", fake_answer)
+    response = client.post(
+        "/api/answer",
+        json={
+            "question": "obec:Roudno Kolik vrtů se navrhuje?",
+            "options": {"max_sources": 6, "min_grade": 3, "neighbours": False, "trace": False},
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "answered"
+    assert body["statements"][0]["check"] == "verified"
+    assert body["statements"][0]["source_ids"] == [1]
+    assert body["missing"] == ["průměr vrtů"]
+    assert body["sources"][0]["cited"] is True
+    assert body["sources"][0]["rerank_grade"] == 3
+    assert body["model"] == "gemini-test"
+
+    assert seen["question"] == "Kolik vrtů se navrhuje?"
+    assert seen["filters"].municipality == "Roudno"
+    assert seen["max_sources"] == 6
+    assert seen["min_grade"] == 3
+    assert seen["use_neighbours"] is False
+    assert seen["keep_prompt"] is False
+
+
+def test_answer_without_evidence_says_so(client, monkeypatch):
+    monkeypatch.setattr(
+        search_api,
+        "answer",
+        lambda *args, **kwargs: _answer_result(
+            status="no_evidence",
+            statements=[],
+            sources=[_source(role="pod prahem", cited=False, rerank_grade=1)],
+            trace={"gate": {"min_grade": 2, "candidates": 40, "passed": 0}},
+        ),
+    )
+    body = client.post("/api/answer", json={"question": "Jaký je radonový index v Jihlavě?"}).json()
+    assert body["status"] == "no_evidence"
+    assert body["statements"] == []
+    assert body["sources"][0]["role"] == "pod prahem"
+    assert body["trace"]["gate"]["passed"] == 0
+
+
+def test_answer_failure_maps_to_503(client, monkeypatch):
+    def failing(*args, **kwargs):
+        raise AnswerUnavailable("ServerError: 503")
+
+    monkeypatch.setattr(search_api, "answer", failing)
+    response = client.post("/api/answer", json={"question": "Kolik vrtů?"})
+    assert response.status_code == 503
+    assert "Vyhledávání funguje" in response.json()["detail"]
+
+
+def test_answer_rejects_an_empty_question(client):
+    assert client.post("/api/answer", json={"question": ""}).status_code == 422
+    assert client.post("/api/answer", json={"question": "obec:Roudno"}).status_code == 422
 
 
 def test_context_validates_uuid_and_reports_missing(client, monkeypatch):

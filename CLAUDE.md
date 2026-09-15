@@ -42,6 +42,11 @@ PostgreSQL (pgvector HNSW + tsvector GIN)
    │                        called by search_reports.py (CLI) and search_api.py (HTTP)
    ▼
 results with section-level citation, per-branch scores, grades and highlights
+   │  context_builder.py    up to 8 graded chunks, neighbours of split sections
+   │  answer_service.py     one Gemini call, then citation_check.py verifies
+   ▼
+an answer whose every sentence carries a quote found in the chunk it cites,
+or no answer at all when nothing reached the gate (ask_reports.py, /api/answer)
 ```
 
 `search_api.py` (FastAPI, port 8010) and `frontend/` (React) put the three modes
@@ -172,6 +177,13 @@ neither configuration works alone.
   recreates the database container mid-session: data survives on the bind
   mount, open connections do not - an evaluation run died this way. Rebuild
   the demo with `--no-deps`.
+- **A citation check is only as good as the text it compares.** The first run
+  over the golden set flagged correct answers three ways, all of them in
+  `citation_check.py`: an annex table's space-separated cells were fused into
+  one long number, a parcel number the model read in the document header was
+  not looked for there, and the digits inside a borehole name (`HV1`) were
+  checked as if they were a measured value. A false alarm costs the same as a
+  miss here - it teaches the reader to ignore the flags.
 
 ## Proposed next work
 
@@ -195,9 +207,11 @@ document and a verbatim snippet of the chunk that answers it.
 `eval_retrieval.py` reports recall@k and MRR per search mode; `--check` verifies
 the set against the database for free. Relevance is matched by text
 (`text_match.py`), not chunk id, so re-chunking does not invalidate the set.
-Run it before and after every retrieval change (the reranker is next), or its
-effect will be guessed again. Answer quality - faithfulness, correct refusal -
-is not measured yet; it arrives with generation.
+Run it before and after every retrieval change, or its effect will be guessed
+again. `eval_answers.py` measures what happens after retrieval: the status of
+each answer, whether it cited the chunk the set names, how many sentences
+passed the citation check, and whether the system stayed silent where the
+corpus has no answer.
 
 The first run (2026-09-11) found that full text answers almost nothing asked
 as a question - 3 of 34 in its top 40 - because `websearch_to_tsquery` ANDs
@@ -210,7 +224,12 @@ alone reaches 0.88 recall@40, with `rerank` on top of it (2026-09-13):
 | rerank | 0.92 | 0.96 | 0.79 | 1 of 34 |
 
 The gate (grade 2) let a relevant chunk through for 33 of 34 answerable
-questions and nothing through for all 6 unanswerable ones. Candidates are the
+questions and nothing through for all 6 unanswerable ones. Generation on top of
+it (2026-09-15): 28 answered, 4 partial, 2 insufficient, 6 no_evidence; the
+expected chunk reached the context for all 34 answerable questions and was
+cited for 31; 72 of 78 sentences passed the citation check; all 6 unanswerable
+questions were refused and none was answered from the model's own knowledge;
+median 13.8 s per question. Candidates are the
 twenty best of each branch, not the fused top 40: the fusion starved chunks
 only full text finds, annex chunks above all, and cost two answers. Grading
 takes a median of 6 s per query - two Gemini calls of 20 candidates - and is

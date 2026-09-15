@@ -49,6 +49,12 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `text_match.py` | Loose text comparison (case, doubled spaces, kinds of dash) for golden-set evidence and later for quotes in answers. No API, no database. |
 | `eval_retrieval.py` | Recall@k and MRR per search mode over `../eval/golden.yaml`, and the relevance gate when `rerank` runs. `--check` verifies the set against the database for free. |
 | `rerank_service.py` | Grades search candidates 0-3 with Gemini (rubric, batches of 20, per-chunk cache), orders them by grade and applies the relevance gate. Model from `GEMINI_RERANK_MODEL`. |
+| `ask_reports.py` | Answers a question from the CLI: the chain below, then the checked sentences and their sources. |
+| `answer_prompts.py` | Czech answering instructions, the `GroundedAnswer` schema, `PROMPT_VERSION`. |
+| `context_builder.py` | Evidence selection, neighbours of split sections, source numbering and the prompt block. No API, no database. |
+| `citation_check.py` | Verifies quotes and numbers of every sentence against the chunks it cites. No API, no database. |
+| `answer_service.py` | Retrieval, reranking, gate, context, one model call, checks, trace. Model from `GEMINI_ANSWER_MODEL`. |
+| `eval_answers.py` | Answer quality over `../eval/golden.yaml`: cited evidence, verified sentences, refusals. |
 
 ## Flags worth knowing
 
@@ -72,6 +78,47 @@ uv run python search_reports.py --list --obec Lednice
 
 `--only` takes the stem, the file name or a path in every script (`Roudno`,
 `Roudno.pdf`, `PDFs/Roudno.pdf`).
+
+## Answering
+
+`ask_reports.py` answers a question instead of listing passages. The chain is
+hybrid retrieval with the any-word full text, reranking, the relevance gate,
+evidence selection, one model call and a deterministic check of the result.
+
+```powershell
+uv run python ask_reports.py "Kolik vrtu pro tepelne cerpadlo se v Roudne navrhuje?"
+uv run python ask_reports.py "Jak hluboko je voda v Lednici?" --obec Lednice --max-sources 6
+uv run python ask_reports.py "..." --show-prompt --json
+uv run python eval_answers.py --only lednice-hladina neg-jihlava --no-save
+```
+
+The parts, each testable on its own:
+
+| Module | Role |
+| --- | --- |
+| `answer_prompts.py` | The Czech instructions, the `GroundedAnswer` schema and `PROMPT_VERSION`. |
+| `context_builder.py` | Picks the evidence, adds a neighbour of a split section, numbers the sources, renders the block. No API, no database. |
+| `citation_check.py` | Looks for every quote in the chunk it cites and for every number of a sentence in its sources. No API, no database. |
+| `answer_service.py` | Runs the chain, keeps the trace, and returns the answer with its sources. |
+
+Costs per question: one query embedding, up to two grading calls for
+candidates not graded before, and one answering call. A question whose
+candidates all stay below the gate costs no answering call at all.
+
+`eval_answers.py` over the golden set on 2026-09-15: answered 28, partial 4,
+insufficient 2 and no_evidence 6; the expected chunk reached the context for
+all 34 answerable questions and was cited for 31; 72 of 78 sentences passed the
+citation check; all 6 unanswerable questions were refused with no invented
+answer; median 13.8 s per question.
+
+The six flagged sentences are deviations, not false alarms - a quote whose
+wording is not in the cited chunk, the isotope number 222 added to radon, one
+changed word, and two annex tables a model cannot reflow verbatim. What the
+number check does allow, each after a false alarm in the first run: a digit
+glued to a letter is a name (`HV1`), not a value; digits may be separated by
+spaces, because tables and thousands print them that way; and the document
+header a source carries into the prompt counts as evidence, while its page and
+section deliberately do not.
 
 ## Measuring retrieval
 

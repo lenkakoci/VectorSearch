@@ -1,14 +1,16 @@
-"""HTTP API over the search service, for the web demo.
+"""HTTP API over the search and answering services, for the web demo.
 
 A thin FastAPI layer: every endpoint validates its input with a Pydantic model,
-opens one connection, calls ``search_service.py`` and returns what it got. No
-search logic lives here, so the command line and the web see the same results.
+opens one connection, calls the service and returns what it got. No search or
+answering logic lives here, so the command line and the web see the same
+results.
 
     GET  /api/health                                     corpus counts
     GET  /api/facets                                     values every filter can take
     POST /api/search                                     one mode, ``rerank`` included
     POST /api/compare                                    fts, vector and hybrid side by side,
                                                          and reranking when ``rerank`` is set
+    POST /api/answer                                     a grounded answer with checked citations
     GET  /api/chunks/{document_id}/{chunk_index}/context the chunks around a hit
     GET  /api/documents/{document_id}                    one report with its extraction
 
@@ -16,6 +18,9 @@ Reranking calls Gemini for every candidate not graded before, so
 ``/api/compare`` runs it only on request. A reranking failure there leaves the
 other columns intact and reports ``rerank_error`` in the rerank column's debug;
 ``/api/search`` with mode ``rerank`` answers 503 instead.
+
+``/api/answer`` never invents: when no candidate reaches the relevance gate it
+returns status ``no_evidence`` with the nearest candidates and calls no model.
 
 Inline prefixes in the query (``autor:Poul hladina vody``) work exactly as on
 the command line and win over the structured filters, so a demo can show both.
@@ -39,10 +44,13 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from answer_service import AnswerResult, AnswerUnavailable, answer
+from context_builder import MAX_SOURCES, PER_DOCUMENT, TOKEN_BUDGET
 from pipeline_common import configure_logging, load_connection_params, load_settings
-from rerank_service import RerankUnavailable
+from rerank_service import MAX_GRADE, MIN_GRADE, RerankUnavailable
 from search_filters import Filters, build_filters, parse_query
 from search_service import (
+    CANDIDATES,
     MODES,
     RERANK_MODE,
     EmbeddingUnavailable,
@@ -59,6 +67,7 @@ logger = logging.getLogger(__name__)
 
 Mode = Literal["fts", "vector", "hybrid", "rerank"]
 ContentKind = Literal["prose", "annex"]
+AnswerStatus = Literal["answered", "partial", "insufficient", "no_evidence"]
 
 _DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3001"
 
@@ -117,6 +126,26 @@ class CompareRequest(QueryIn):
     rerank: bool = Field(False, description="Also grade forty hybrid candidates with Gemini; costs API calls")
 
 
+class AnswerOptions(BaseModel):
+    """How much evidence the answer may use, and how strict the gate is."""
+
+    candidates: int = Field(CANDIDATES, ge=5, le=80)
+    min_grade: int = Field(MIN_GRADE, ge=0, le=MAX_GRADE)
+    max_sources: int = Field(MAX_SOURCES, ge=1, le=20)
+    per_document: int = Field(PER_DOCUMENT, ge=1, le=20)
+    token_budget: int = Field(TOKEN_BUDGET, ge=500, le=60000)
+    neighbours: bool = True
+    trace: bool = Field(True, description="Return the prompt and the raw answer in the trace")
+
+
+class AnswerRequest(BaseModel):
+    """A question to answer from the corpus."""
+
+    question: str = Field(min_length=1, max_length=1000)
+    filters: FiltersIn = FiltersIn()
+    options: AnswerOptions = AnswerOptions()
+
+
 class Hit(BaseModel):
     """One chunk in a ranking, with everything needed to say why it is there."""
 
@@ -138,6 +167,7 @@ class Hit(BaseModel):
     report_type: str | None
     report_date: date | None
     locality: str | None
+    token_count: int | None = None
     vector_rank: int | None
     vector_score: float | None
     fts_rank: int | None
@@ -167,6 +197,63 @@ class CompareResponse(BaseModel):
     vector: SearchResponse
     hybrid: SearchResponse
     rerank: SearchResponse | None = None
+
+
+class CheckedStatement(BaseModel):
+    """One sentence of the answer and the verdict of the citation check."""
+
+    text: str
+    source_ids: list[int]
+    quotes: list[str]
+    check: str
+    note: str
+
+
+class AnswerConflict(BaseModel):
+    """Two sources saying different things about the same thing."""
+
+    topic: str
+    source_ids: list[int]
+    description: str
+
+
+class AnswerSource(BaseModel):
+    """One chunk offered to the model, with its place in the answer."""
+
+    id: int
+    role: str
+    cited: bool = False
+    chunk_id: str
+    document_id: str
+    chunk_index: int
+    section: str | None
+    content_kind: str
+    page_from: int | None
+    page_to: int | None
+    chunk_raw: str
+    title: str | None
+    municipality: str | None
+    report_type: str | None
+    report_date: date | None
+    organization: str | None
+    token_count: int | None = None
+    rerank_grade: int | None = None
+    rerank_reason: str | None = None
+    candidate_rank: int | None = None
+
+
+class AnswerResponse(BaseModel):
+    """A grounded answer: sentences, their sources and how it was produced."""
+
+    question: str
+    status: AnswerStatus
+    statements: list[CheckedStatement]
+    missing: list[str]
+    conflicts: list[AnswerConflict]
+    sources: list[AnswerSource]
+    model: str
+    prompt_version: int
+    trace: dict[str, Any]
 
 
 class FacetValue(BaseModel):
@@ -207,6 +294,8 @@ class FacetsResponse(BaseModel):
 
 
 class ContextChunk(BaseModel):
+    chunk_id: str | None = None
+    token_count: int | None = None
     chunk_index: int
     section: str | None
     content_kind: str
@@ -255,12 +344,12 @@ def connection() -> Iterator[Any]:
         conn.close()
 
 
-def _resolve(request: QueryIn) -> tuple[str, Filters]:
-    """Split inline prefixes off the query and merge them with the form filters."""
-    text, inline = parse_query(request.query)
-    if not text:
+def _resolve(text: str, filters: FiltersIn) -> tuple[str, Filters]:
+    """Split inline prefixes off the text and merge them with the form filters."""
+    remaining, inline = parse_query(text)
+    if not remaining:
         raise HTTPException(status_code=422, detail="Dotaz neobsahuje žádný hledaný text, jen filtry.")
-    return text, inline.merge(request.filters.to_filters())
+    return remaining, inline.merge(filters.to_filters())
 
 
 def _response(result: SearchResult) -> SearchResponse:
@@ -271,6 +360,20 @@ def _response(result: SearchResult) -> SearchResponse:
         fetch=result.fetch,
         hits=[Hit.model_validate(hit) for hit in result.hits],
         debug=result.debug,
+    )
+
+
+def _answer_response(result: AnswerResult) -> AnswerResponse:
+    return AnswerResponse(
+        question=result.question,
+        status=result.status,  # type: ignore[arg-type]
+        statements=[CheckedStatement.model_validate(statement) for statement in result.statements],
+        missing=result.missing,
+        conflicts=[AnswerConflict.model_validate(conflict) for conflict in result.conflicts],
+        sources=[AnswerSource.model_validate(source) for source in result.sources],
+        model=result.model,
+        prompt_version=result.prompt_version,
+        trace=result.trace,
     )
 
 
@@ -289,6 +392,14 @@ def _rerank_error(exc: RerankUnavailable) -> HTTPException:
         status_code=503,
         detail="Reranking není dostupný (model neodpověděl nebo chybí klíč). "
         "Hybridní režim funguje bez něj.",
+    )
+
+
+def _answer_error(exc: AnswerUnavailable) -> HTTPException:
+    logger.error("Answering unavailable: %s", exc)
+    return HTTPException(
+        status_code=503,
+        detail="Model pro odpověď není dostupný. Vyhledávání funguje bez něj.",
     )
 
 
@@ -323,7 +434,7 @@ def get_facets() -> FacetsResponse:
 @router.post("/search", response_model=SearchResponse)
 def search(request: SearchRequest) -> SearchResponse:
     """Search in one mode."""
-    text, filters = _resolve(request)
+    text, filters = _resolve(request.query, request.filters)
     try:
         with connection() as conn:
             result = run_search(conn, text, request.mode, filters, request.limit, SETTINGS)
@@ -337,7 +448,7 @@ def search(request: SearchRequest) -> SearchResponse:
 @router.post("/compare", response_model=CompareResponse)
 def compare_modes(request: CompareRequest) -> CompareResponse:
     """Run the query in every mode; one embedding request serves them all."""
-    text, filters = _resolve(request)
+    text, filters = _resolve(request.query, request.filters)
     modes = MODES + ((RERANK_MODE,) if request.rerank else ())
     try:
         with connection() as conn:
@@ -345,6 +456,35 @@ def compare_modes(request: CompareRequest) -> CompareResponse:
     except EmbeddingUnavailable as exc:
         raise _embedding_error(exc) from exc
     return CompareResponse(query=text, **{mode: _response(result) for mode, result in results.items()})
+
+
+@router.post("/answer", response_model=AnswerResponse)
+def answer_question(request: AnswerRequest) -> AnswerResponse:
+    """Answer a question from the corpus, with every sentence checked."""
+    text, filters = _resolve(request.question, request.filters)
+    options = request.options
+    try:
+        with connection() as conn:
+            result = answer(
+                conn,
+                text,
+                filters,
+                settings=SETTINGS,
+                candidates=options.candidates,
+                min_grade=options.min_grade,
+                max_sources=options.max_sources,
+                per_document=options.per_document,
+                token_budget=options.token_budget,
+                use_neighbours=options.neighbours,
+                keep_prompt=options.trace,
+            )
+    except EmbeddingUnavailable as exc:
+        raise _embedding_error(exc) from exc
+    except RerankUnavailable as exc:
+        raise _rerank_error(exc) from exc
+    except AnswerUnavailable as exc:
+        raise _answer_error(exc) from exc
+    return _answer_response(result)
 
 
 @router.get("/chunks/{document_id}/{chunk_index}/context", response_model=ContextResponse)
@@ -382,7 +522,7 @@ def create_app() -> FastAPI:
     """Build the application."""
     configure_logging()
     origins = [item.strip() for item in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if item.strip()]
-    application = FastAPI(title="VectorSearch demo API", version="0.2.0")
+    application = FastAPI(title="VectorSearch demo API", version="0.3.0")
     application.add_middleware(
         CORSMiddleware,
         allow_origins=origins,

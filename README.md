@@ -113,6 +113,9 @@ Spouštět z `data/scripts`.
 | `search_service.py` | Vyhledávací logika jako knihovna (SQL, embedding, RRF, kontext, facety); volá ji CLI i API |
 | `search_api.py` | FastAPI nad službou pro webové demo (`uv run uvicorn search_api:app --port 8010`) |
 | `eval_retrieval.py` | Měření kvality vyhledávání nad zlatou sadou: recall@k a MRR pro každý režim |
+| `ask_reports.py` | Odpověď s citacemi z příkazové řádky |
+| `answer_service.py` | Celý řetěz odpovědi: kandidáti, brána, kontext, model, kontrola citací |
+| `eval_answers.py` | Měření kvality odpovědí nad zlatou sadou |
 
 Užitečné přepínače:
 
@@ -501,6 +504,61 @@ Relevance se určuje podle textu ([text_match.py](data/scripts/text_match.py)
 ignoruje velikost písmen, zdvojené mezery a druh pomlčky), ne podle chunk_id,
 takže sada přežije přechunkování. Po změně korpusu nebo sady nejdřív spusť
 `--check`: výňatek, který nic nenajde, by se jinak tiše počítal jako nenalezený.
+
+## Odpovědi s citacemi
+
+Vyhledávání vrací pasáže. Nad ním stojí druhý režim, který z nalezených úryvků
+složí odpověď a u každé věty uvede, ze kterého úryvku pochází.
+
+```powershell
+uv run python ask_reports.py "Kolik vrtů pro tepelné čerpadlo se v Roudně navrhuje?"
+uv run python ask_reports.py "Jak hluboko je voda v Lednici?" --obec Lednice --max-sources 6
+uv run python ask_reports.py "Jaká je vydatnost vrtu HV-979/3?" --show-prompt
+```
+
+Řetěz je: hybridní hledání s volnějším fulltextem, reranking, brána relevance,
+výběr důkazů, jedno volání modelu a strojová kontrola odpovědi.
+
+- **Bez podkladů se negeneruje.** Když žádný kandidát nedosáhne známky 2, model
+  se vůbec nezavolá a odpověď má stav `no_evidence`. Uživatel dostane nejbližší
+  nalezené úryvky, ať posoudí sám.
+- **Do kontextu jde nejvýš osm úryvků**, z jednoho posudku v prvním kole nejvýš
+  tři, se stropem deset tisíc tokenů. K úryvku, jehož sekce je rozdělená do víc
+  oken, se přidá soused s rolí `kontext`.
+- **Každá věta musí mít zdroj a doslovný citát.** Server pak citát hledá
+  v citovaném úryvku a navíc ověřuje, že každé číslo z věty ve zdrojích opravdu
+  je. Věta, která neprojde, se označí a stav klesne na `partial`. Čísla stran
+  a kapitol do vět nepatří, ukazují se u citace.
+- **Stavy odpovědi:** `answered`, `partial`, `insufficient` a `no_evidence`.
+- **Model** nastavuje `GEMINI_ANSWER_MODEL`, výchozí je `GEMINI_MODEL`.
+  Odpovídá se s teplotou 0 a prompt má vlastní verzi, která jde s každou
+  odpovědí.
+
+Přes API: `POST /api/answer` s tělem `{"question": "…", "filters": {…},
+"options": {…}}`. Vrací věty s citacemi, zdroje s příznakem `cited`, chybějící
+údaje, rozpory mezi zdroji a trace celého průběhu. Webové rozhraní pro
+odpovědi přijde v další fázi.
+
+Kvalitu odpovědí měří `eval_answers.py` nad stejnou zlatou sadou: jestli
+odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém
+mlčel tam, kde korpus odpověď nemá. Měření ze 15. 9. 2026 nad 40 otázkami:
+
+| co se měřilo | výsledek |
+| --- | ---: |
+| odpovězeno / částečně / nedostatek podkladů | 28 / 4 / 2 |
+| očekávaný úryvek byl v kontextu | 34 z 34 |
+| odpověď ho i citovala | 31 z 34 |
+| věty, které prošly kontrolou citací | 72 z 78 |
+| otázky bez odpovědi v korpusu: systém mlčel | 6 z 6 |
+| vymyšlená odpověď | 0 |
+| medián času na otázku | 13,8 s |
+
+Šest vět, které kontrolou neprošly, není chyba kontroly. Dvě měly citát, jehož
+znění v citovaném úryvku není, jedna přidala k radonu číslo izotopu 222, jedna
+změnila „podmínečně" na „podmíněně" a dvě přepisovaly tabulku z přílohy, kde
+doslovný citát prakticky nejde pořídit. Kontrola čísel proto nepovažuje za
+číslo to, co je nalepené na písmeno (vrt HV1, sonda J16), připouští mezeru mezi
+číslicemi kvůli tabulkám a tisícům a bere jako oporu i hlavičku dokumentu.
 
 ## Český fulltext
 

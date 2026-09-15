@@ -232,7 +232,7 @@ _FTS_ANY_CANDIDATES = """
 _HYDRATE = """
 SELECT r.score, r.tiebreak,
        c.chunk_id, c.document_id, c.chunk_index, c.section, c.content_kind,
-       c.page_from, c.page_to, c.chunk_raw,
+       c.page_from, c.page_to, c.chunk_raw, c.token_count,
        d.title, d.locality, d.report_date, d.author, d.report_type,
        d.extraction_json->>'municipality' AS municipality,
        d.extraction_json->>'author_organization' AS organization,
@@ -276,7 +276,8 @@ WHERE d.id = %s
 """
 
 _CONTEXT_QUERY = """
-SELECT c.chunk_index, c.section, c.content_kind, c.page_from, c.page_to, c.chunk_raw
+SELECT c.chunk_id, c.chunk_index, c.section, c.content_kind, c.page_from, c.page_to,
+       c.chunk_raw, c.token_count
 FROM public.document_chunks c
 WHERE c.document_id = %s AND c.chunk_index BETWEEN %s AND %s
 ORDER BY c.chunk_index
