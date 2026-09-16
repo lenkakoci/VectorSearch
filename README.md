@@ -587,6 +587,11 @@ výběr důkazů, jedno volání modelu a strojová kontrola odpovědi.
   verzi promptu a otisk manifestu, takže po novém ingestu nebo změně promptu
   se odpovídá znovu. `--fresh` v CLI a „nová odpověď" na stránce vynutí nový
   výpočet, `--no-cache` cache úplně obejde.
+- **Známky se platí jednou.** Ohodnocené kandidáty si drží proces v paměti
+  a navíc `data/processed/answers/grades/`, takže druhý dotaz na stejnou otázku
+  je nemá z čeho platit, i když běží v jiném procesu. Měřeno: 7,1 s
+  známkování u nové otázky, 4 ms u otázky ohodnocené dřív. Klíč drží model,
+  otázku i otisk korpusu, protože `chunk_id` přečkává i přechunkování.
 - **Co se ptalo, se zapisuje.** Každá odpověď přidá řádek do
   `data/processed/answers/asked.jsonl`: otázka, věty s citáty a výsledkem
   kontroly, zdroje s dokumenty, počty z brány a kontextu a jestli šlo o nový
@@ -598,6 +603,14 @@ Přes API: `POST /api/answer` s tělem `{"question": "…", "filters": {…},
 "options": {…}}`. Vrací věty s citacemi, zdroje s příznakem `cited`, chybějící
 údaje, rozpory mezi zdroji a trace celého průběhu. Ve webovém rozhraní je to
 záložka „Zeptat se dokumentů“, popsaná níž.
+
+Kolik kandidátů se hodnotí, nastavuje `--candidates`. Měření ze 16. 9. 2026
+ukazuje, že šetřit se na nich nevyplatí:
+
+| kandidátů | recall@5 | recall@40 | MRR | brána pustila | otázky bez odpovědi uzavřela |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 40 | 0,924 | 0,956 | 0,806 | 33 z 34 | 6 z 6 |
+| 24 | 0,894 | 0,926 | 0,792 | 32 z 34 | 6 z 6 |
 
 Kvalitu odpovědí měří `eval_answers.py` nad stejnou zlatou sadou: jestli
 odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém
@@ -675,7 +688,7 @@ podkladu nedostala vymyšlenou odpověď.
 | **Prozaická příloha bez formulářových stran** | ZZ_Pazderna: 34 chunků pod `6.1 SEZNAM NOREM` | hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat |
 | **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
-| **Reranking je nejpomalejší krok** | ohodnocení 40 kandidátů trvá v mediánu 6 s, nejdéle 13 s | dvě volání Gemini po 20 kandidátech. Zkrátit jde menšími dávkami nebo menším počtem kandidátů, vždy s kontrolou na zlaté sadě |
+| **Reranking je nejpomalejší krok** | u nové otázky 7 až 13 s, u dřív ohodnocené 4 ms | změřeno: menší dávky nepomáhají (latence je na volání, ne na kandidáta) a méně kandidátů měřitelně zhoršuje výsledky. Zbývá tedy neznámkovat znovu, což řeší cache známek na disku |
 | **Režim Fulltext zůstává přísný** | na otázky v přirozeném jazyce najde odpověď jen u 3 z 34 | záměr: ve Vyhledávání ukazuje limity hledání podle slov. Kandidáti pro reranking používají volnější fulltext, který nevyžaduje všechna slova |
 | **Doslovný citát z tabulky v příloze** | občas neprojde kontrolou | model řádek tabulky přeformátuje, takže citát nesedí znak po znaku a věta zůstane označená jako neověřená, i když čísla souhlasí. Týká se 2 vět ze 78 |
 | **Citace ze svazku ukáže cizí sekci** | čeká na rozpad svazků | u Sedmirohé a Metan jih sedí chunky pod nadpisem z jiné dílčí zprávy, takže i správně nalezený úryvek se cituje se špatnou sekcí |

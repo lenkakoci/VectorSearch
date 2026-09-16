@@ -64,7 +64,15 @@ from pipeline_common import (
 )
 from rerank_service import MIN_GRADE, RerankUnavailable
 from search_filters import Filters
-from search_service import ALL_MODES, MODES, RERANK_MODE, EmbeddingUnavailable, SearchResult, compare
+from search_service import (
+    ALL_MODES,
+    CANDIDATES,
+    MODES,
+    RERANK_MODE,
+    EmbeddingUnavailable,
+    SearchResult,
+    compare,
+)
 from text_match import contains_normalized
 
 logger = logging.getLogger(__name__)
@@ -284,14 +292,30 @@ def load_stems(connection) -> dict[str, str]:
 
 
 def search_modes(
-    connection, text: str, modes: tuple[str, ...], depth: int, settings: Settings
+    connection,
+    text: str,
+    modes: tuple[str, ...],
+    depth: int,
+    settings: Settings,
+    candidates: int = CANDIDATES,
 ) -> dict[str, SearchResult]:
     """Return the top ``depth`` results of every requested mode for one question.
 
     One ``compare()`` call serves them all, with one embedding at most; a
     reranking failure aborts rather than scoring an empty column as a miss.
+    ``candidates`` is how many chunks ``rerank`` grades, which is what grading
+    costs and therefore the knob worth measuring.
     """
-    return compare(connection, text, Filters(), depth, settings, modes=modes, raise_rerank_errors=True)
+    return compare(
+        connection,
+        text,
+        Filters(),
+        depth,
+        settings,
+        modes=modes,
+        candidates=candidates,
+        raise_rerank_errors=True,
+    )
 
 
 def evaluate_question(
@@ -481,6 +505,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Search modes (default: fts vector hybrid; rerank calls Gemini to grade candidates)",
     )
     parser.add_argument("--depth", type=int, default=DEPTH, help=f"Ranks examined per mode (default: {DEPTH})")
+    parser.add_argument(
+        "--candidates",
+        type=int,
+        default=CANDIDATES,
+        help=f"Candidates fetched per branch and graded by rerank (default: {CANDIDATES})",
+    )
     parser.add_argument("--golden", type=Path, default=GOLDEN_PATH, help="Golden set file")
     parser.add_argument("--out", type=Path, help="JSON results file (default: processed/eval/retrieval-<time>.json)")
     parser.add_argument("--no-save", action="store_true", help="Print the report without writing JSON")
@@ -523,7 +553,9 @@ def main(argv: list[str] | None = None) -> int:
         for number, question in enumerate(questions, start=1):
             logger.info("[%d/%d] %s", number, len(questions), question.id)
             try:
-                results = search_modes(connection, question.question, modes, args.depth, settings)
+                results = search_modes(
+                    connection, question.question, modes, args.depth, settings, args.candidates
+                )
             except EmbeddingUnavailable as exc:
                 logger.error(
                     "Could not embed %r (%s). Full text alone needs no API: re-run with --modes fts fts_any.",
@@ -550,6 +582,7 @@ def main(argv: list[str] | None = None) -> int:
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "golden": {"path": str(args.golden), "version": version, "questions": len(questions)},
                 "depth": args.depth,
+                "candidates": args.candidates,
                 "modes": list(modes),
                 "embedding_model": settings.embedding_model,
                 "embedding_dimensions": settings.embedding_dimensions,

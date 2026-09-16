@@ -63,7 +63,10 @@ function stepsOf(answer: AnswerResponse): Step[] {
   if (rerank) {
     steps.push({
       name: 'Reranking',
-      detail: `${rerank.reranker} · ${rerank.model ?? '–'} · ${rerank.graded} nově, ${rerank.cached} z cache, ${rerank.calls} volání`,
+      detail:
+        `${rerank.reranker} · ${rerank.model ?? '–'} · ${rerank.graded} nově, ${rerank.cached} z cache` +
+        (rerank.from_disk ? ` (${rerank.from_disk} z disku, model se na ně neptal)` : '') +
+        `, ${rerank.calls} volání`,
       count: `${rerank.candidates} známek`,
       ms: rerank.ms,
     })

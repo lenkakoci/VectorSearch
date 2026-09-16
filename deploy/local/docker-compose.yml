@@ -51,6 +51,12 @@ services:
       # The source reports, read-only: a citation links to the page of the PDF
       # it came from, and the API serves that file. Nothing here writes to them.
       - ../../data/PDFs:/app/PDFs:ro
+      # The manifest, read-only. Both caches key on a fingerprint of it, so that
+      # re-ingesting a report invalidates answers and grades about the old text.
+      # Without it the container fingerprints an empty corpus and shares nothing
+      # with the command line. ingest.py rewrites the file in place, so the
+      # mount keeps pointing at it.
+      - ../../data/processed/manifest.json:/processed/manifest.json:ro
     ports:
       # Loopback only: the reports are internal and the API has no authentication.
       - "127.0.0.1:8010:8010"

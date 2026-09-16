@@ -39,6 +39,8 @@ export interface RerankStats {
   model: string | null
   graded: number
   cached: number
+  // Grades that came from the cache on disk, so they survived the process.
+  from_disk?: number
   calls: number
   ms: number
   candidates: number

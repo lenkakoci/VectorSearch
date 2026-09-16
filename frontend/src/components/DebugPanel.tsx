@@ -33,7 +33,12 @@ function Block({ response }: { response: SearchResponse }) {
   if (rerank) {
     facts.push(
       ['reranker', `${rerank.reranker} · ${rerank.model ?? '–'}`],
-      ['ohodnoceno', `${rerank.candidates} kandidátů: ${rerank.graded} nově, ${rerank.cached} z cache · ${rerank.calls} volání · ${rerank.ms} ms`],
+      [
+        'ohodnoceno',
+        `${rerank.candidates} kandidátů: ${rerank.graded} nově, ${rerank.cached} z cache` +
+          (rerank.from_disk ? ` (z toho ${rerank.from_disk} z disku)` : '') +
+          ` · ${rerank.calls} volání · ${rerank.ms} ms`,
+      ],
       ['brána relevance', `${rerank.passed} z ${rerank.candidates} má známku aspoň ${rerank.min_grade}`],
     )
   }

@@ -24,6 +24,12 @@ close the block it sits in. Grades are cached per model, query and chunk,
 because a grade depends on that pair alone: re-running a search with another
 filter or limit costs nothing for chunks already graded.
 
+The cache has two layers. In memory it lasts as long as the process, which is
+what the web demo needs, since its API stays up between questions. On disk
+(``grade_cache.py``) it outlives the process, which is what the command line
+and an evaluation run need: both start cold and would otherwise pay for forty
+gradings every time.
+
 Gemini grades because the reports already go to Gemini for extraction and
 embedding; reranking adds no new processor of the documents.
 """
@@ -37,6 +43,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from google.genai import types
@@ -49,8 +56,9 @@ from tenacity import (
     wait_exponential,
 )
 
+import grade_cache
 from gemini_auth import create_gemini_client, is_retryable_error
-from pipeline_common import Settings
+from pipeline_common import ANSWERS_DIR, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +67,16 @@ MAX_GRADE = 3
 
 # Candidates per model call, and calls in flight at once. Two batches of twenty
 # grade forty candidates in the time of one call without testing the quota.
+#
+# Measured on five questions (2026-09-16), median grading time: 20x2 took
+# 9.5 s, 10x4 took 8.5 s, 8x5 took 9.4 s, with single questions ranging from
+# 6 s to 17 s in every configuration. Cutting the work into more calls does not
+# pay: the model's latency is mostly per call, not per candidate, and the
+# spread between questions is larger than the difference between the settings.
+# Smaller batches also change the grades themselves - 29 of 200 grades moved -
+# because a batch is graded in one prompt and its composition is the
+# comparison set. The saving worth having is not grading at all, which is what
+# grade_cache.py does.
 BATCH_SIZE = 20
 MAX_PARALLEL_CALLS = 2
 
@@ -255,18 +273,33 @@ class NoReranker:
 
     def grade(self, query: str, hits: list[dict[str, Any]]) -> tuple[list[Grade], dict[str, Any]]:
         """Return no grade for any hit."""
-        stats = {"reranker": self.name, "model": None, "graded": 0, "cached": 0, "calls": 0, "ms": 0.0}
+        stats = {
+            "reranker": self.name,
+            "model": None,
+            "graded": 0,
+            "cached": 0,
+            "from_disk": 0,
+            "calls": 0,
+            "ms": 0.0,
+        }
         return [(None, "bez rerankingu")] * len(hits), stats
 
 
 @dataclass
 class GeminiGrader:
-    """Grades candidates with a Gemini model, in batches, with a per-chunk cache."""
+    """Grades candidates with a Gemini model, in batches, with a per-chunk cache.
+
+    The cache has two layers. In memory it lasts as long as the process, which
+    is what the web demo needs. On disk, under ``cache_dir``, it outlives the
+    process, which is what the command line and an evaluation run need: both
+    start cold and would otherwise pay for forty gradings every time.
+    """
 
     model: str
     batch_size: int = BATCH_SIZE
     max_parallel: int = MAX_PARALLEL_CALLS
     name: str = "gemini"
+    cache_dir: Path | None = None
 
     def grade(self, query: str, hits: list[dict[str, Any]]) -> tuple[list[Grade], dict[str, Any]]:
         """Grade every hit, calling the model only for chunks not graded before.
@@ -278,6 +311,17 @@ class GeminiGrader:
         cache_query = " ".join(query.split()).lower()
         keys = [(self.model, cache_query, str(hit["chunk_id"])) for hit in hits]
         grades: list[Grade | None] = [_cache_get(key) for key in keys]
+
+        disk_key = grade_cache.key_of(self.model, query) if self.cache_dir is not None else None
+        from_disk = 0
+        if disk_key is not None:
+            stored = grade_cache.load(disk_key, self.cache_dir)
+            for index, key in enumerate(keys):
+                if grades[index] is None and key[2] in stored:
+                    grades[index] = stored[key[2]]
+                    _cache_put(key, stored[key[2]])
+                    from_disk += 1
+
         missing = [index for index, grade in enumerate(grades) if grade is None]
         batches = [missing[start:start + self.batch_size] for start in range(0, len(missing), self.batch_size)]
 
@@ -295,11 +339,22 @@ class GeminiGrader:
                     if grade[1] != UNGRADED_REASON:
                         _cache_put(keys[index], grade)
 
+        if disk_key is not None and missing:
+            # Everything known for this question goes back, not only the new
+            # grades, so a file always holds the whole picture.
+            known = {
+                key[2]: grade
+                for key, grade in zip(keys, grades)
+                if grade is not None and grade[1] != UNGRADED_REASON
+            }
+            grade_cache.store(disk_key, known, self.cache_dir, model=self.model, query=query)
+
         stats = {
             "reranker": self.name,
             "model": self.model,
             "graded": len(missing),
             "cached": len(hits) - len(missing),
+            "from_disk": from_disk,
             "calls": len(batches),
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
@@ -318,5 +373,5 @@ def create_reranker(settings: Settings, name: str = "gemini") -> Reranker:
     if name == "none":
         return NoReranker()
     if name == "gemini":
-        return GeminiGrader(model=settings.rerank_model)
+        return GeminiGrader(model=settings.rerank_model, cache_dir=ANSWERS_DIR)
     raise ValueError(f"Unknown reranker {name!r}; expected gemini or none")

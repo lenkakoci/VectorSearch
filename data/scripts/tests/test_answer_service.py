@@ -191,3 +191,16 @@ def test_a_closed_gate_is_remembered_too(monkeypatch, settings, tmp_path):
     assert first.status == NO_EVIDENCE
     assert second.status == NO_EVIDENCE
     assert second.trace["cache"] == "hit"
+
+def test_the_candidate_count_reaches_the_search(monkeypatch, settings):
+    """How many chunks get graded is what reranking costs, so the option has to arrive."""
+    seen = {}
+
+    def spy(connection, question, filters, limit, config, **kwargs):
+        seen["limit"] = limit
+        seen["candidates"] = kwargs.get("candidates")
+        return _search(BELOW_GATE, passed=0)
+
+    monkeypatch.setattr(answer_service, "compare", spy)
+    answer(None, "Kolik vrtů se navrhuje?", settings=settings, candidates=12)
+    assert seen == {"limit": 12, "candidates": 12}

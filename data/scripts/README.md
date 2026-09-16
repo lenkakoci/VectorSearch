@@ -58,6 +58,7 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `eval_answers.py` | Answer quality over `../eval/golden.yaml`: cited evidence, verified sentences, refusals. |
 | `answer_log.py` | Appends every answered question to `../processed/answers/asked.jsonl`. No API, no database. |
 | `answer_cache.py` | Serves an identical question from disk instead of paying for it again. No API, no database. |
+| `grade_cache.py` | Keeps grades between processes, so the CLI and an evaluation run stop re-grading. No API, no database. |
 
 ## Flags worth knowing
 
@@ -112,6 +113,7 @@ identical question asked before costs nothing at all:
 | Module | Role |
 | --- | --- |
 | `answer_cache.py` | Keyed by question, filters, options, model, `PROMPT_VERSION` and a fingerprint of the manifest, so a re-ingest or a new prompt invalidates what is stored. `--fresh` on the CLI and `options.fresh` in the API answer again and replace it. Every failure reads as a miss. |
+| `grade_cache.py` | The grade cache with a life longer than a process. `rerank_service.py` remembers grades in memory, which serves the web demo whose API stays up; on disk they survive, which is what the CLI and an evaluation run need. Keyed by model, question and the same corpus fingerprint, because a chunk id is `uuid5(document_id:chunk_index)` and survives re-chunking even when its text does not. |
 | `answer_log.py` | One JSON line per answer: the question, the statements with their quotes and checks, the sources with their documents, the gate and context counts, and whether the answer was paid for or cached. The prompt and the raw answer are left out. `--no-log` turns it off. |
 
 Both write under `../processed/answers/`, or under `ANSWER_DIR` when it is set -

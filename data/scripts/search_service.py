@@ -564,10 +564,11 @@ def _rerank(
     rankings: dict[str, list[dict[str, Any]]],
     limit: int,
     reranker: Reranker,
+    candidate_count: int = CANDIDATES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Pick the candidates, grade them and return them best first, with statistics."""
     view = _branch_view(rankings, any_word=True)
-    candidates = select_candidates(view, CANDIDATES)
+    candidates = select_candidates(view, candidate_count)
     annotate_across(candidates, view)
     for position, hit in enumerate(candidates, start=1):
         hit["candidate_rank"] = position
@@ -590,6 +591,7 @@ def compare(
     settings: Settings | None = None,
     *,
     modes: tuple[str, ...] = MODES,
+    candidates: int = CANDIDATES,
     reranker: Reranker | None = None,
     raise_rerank_errors: bool = False,
 ) -> dict[str, SearchResult]:
@@ -598,6 +600,11 @@ def compare(
     The branches run once and serve every mode: one embedding request and one
     SQL query per branch. A single-branch view is the head of its candidate
     list, the same head a direct search would return.
+
+    ``candidates`` is how many chunks the reranker grades, which is what
+    reranking costs; ``limit`` is only how many come back. They are separate
+    because lowering the cost and shortening the result are different
+    decisions.
 
     A reranking failure leaves the other modes intact: the ``rerank`` result
     comes back empty with ``rerank_error`` in its debug, unless
@@ -620,7 +627,7 @@ def compare(
 
     fetch = limit * HYBRID_OVERFETCH if any(mode in _FUSED_MODES for mode in modes) else limit
     if RERANK_MODE in modes:
-        fetch = max(fetch, CANDIDATES * CANDIDATE_OVERFETCH)
+        fetch = max(fetch, candidates * CANDIDATE_OVERFETCH)
 
     rankings, debug = _fetch_branches(
         connection,
@@ -641,7 +648,9 @@ def compare(
         mode_debug = dict(debug, fts_match="any" if any_word else "all")
         if mode == RERANK_MODE:
             try:
-                hits, stats = _rerank(query, rankings, limit, reranker or create_reranker(settings))
+                hits, stats = _rerank(
+                    query, rankings, limit, reranker or create_reranker(settings), candidates
+                )
             except RerankUnavailable as exc:
                 if raise_rerank_errors:
                     raise
@@ -669,6 +678,7 @@ def run_search(
     limit: int = 5,
     settings: Settings | None = None,
     *,
+    candidates: int = CANDIDATES,
     reranker: Reranker | None = None,
 ) -> SearchResult:
     """Search in one mode.
@@ -687,6 +697,7 @@ def run_search(
         limit,
         settings,
         modes=(mode,),
+        candidates=candidates,
         reranker=reranker,
         raise_rerank_errors=True,
     )[mode]

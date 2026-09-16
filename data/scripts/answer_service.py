@@ -281,6 +281,7 @@ def answer(
         candidates,
         settings,
         modes=(RERANK_MODE,),
+        candidates=candidates,
         reranker=reranker,
         raise_rerank_errors=True,
     )[RERANK_MODE]

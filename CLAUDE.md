@@ -283,11 +283,30 @@ resolves only the file name inside `REPORTS_INPUT_DIR`. `POST
 /api/answer/stream` runs the same chain and sends each step as a server-sent
 event, so the page says what is happening instead of spinning; the chain takes
 an `on_progress` callback and the endpoint runs it in a thread draining a
-queue. What is left:
+queue. Grading, the slowest step, was measured rather than guessed
+(2026-09-16) and the answer is that it cannot be made faster, only avoided:
 
-- Grading is the slowest step - median 6 s, two Gemini calls of 20 candidates -
-  and shortening it is the change with the most measurable payoff. Smaller
-  batches or fewer candidates, each verified on the golden set.
+- **Smaller batches do not pay.** Median grading over five questions: 20x2 took
+  9.5 s, 10x4 took 8.5 s, 8x5 took 9.4 s, with single questions between 6 s and
+  17 s in every setting. Latency is mostly per call, not per candidate. Smaller
+  batches also move the grades themselves - 29 of 200 changed - because a batch
+  is graded in one prompt and its composition is the comparison set.
+- **Fewer candidates cost accuracy.** Over the golden set, 24 candidates
+  instead of 40 drop recall@5 from 0.92 to 0.89, recall@40 from 0.96 to 0.93,
+  MRR from 0.81 to 0.79, and close the gate on one answerable question more.
+  Forty stays.
+- **So grades are kept.** `grade_cache.py` writes them under
+  `ANSWER_DIR/grades`, keyed by model, question and corpus fingerprint: a
+  question graded before costs 4 ms instead of 7 s, in any process. The CLI,
+  an evaluation run and the API share one directory, which is why the compose
+  file mounts the manifest into the container - without it the container
+  fingerprints an empty corpus and shares nothing.
+- While measuring, `candidates` turned out to control only how many reranked
+  hits came back, not how many were graded; it now does what it says, in
+  `compare()`, `run_search()`, the CLI, the API and `eval_retrieval.py`.
+
+What is left of this list: nothing that does not cost a paid re-run over the
+whole corpus. Items 1 and 2 above are both that.
 
 Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
 its annex has no form pages after the last heading, so there is no boundary to
