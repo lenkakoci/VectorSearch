@@ -183,6 +183,13 @@ neither configuration works alone.
   give up at 120 s while the API went on to finish the answer. `frontend/nginx.conf`
   waits 300 s for `/api/`; a timeout that is shorter than the chain behind it
   looks exactly like a broken endpoint.
+- **A cache whose key names a file the container cannot see shares nothing.**
+  Both caches key on a fingerprint of `manifest.json`, so that re-ingesting a
+  report invalidates them. The API image carries no processed directory, so
+  inside it that fingerprint was empty: the container and the command line
+  wrote to the same mounted directory and never read each other's entries. The
+  compose file now mounts the manifest read-only. A cache that silently misses
+  looks exactly like a cache that is working.
 - **A citation check is only as good as the text it compares.** The first run
   over the golden set flagged correct answers three ways, all of them in
   `citation_check.py`: an annex table's space-separated cells were fused into
@@ -245,9 +252,51 @@ Run `eval_retrieval.py` before and after every retrieval change, and
 `eval_answers.py` after every change to the prompt, the context or the check.
 Both cost API calls; both are cheaper than guessing.
 
+Around that chain sit six things that make the demo cheap to run and possible
+to explain, none of which changes what an answer says (2026-09-16):
+
+- `injection_scan.py`, run by `check_pipeline.py`, tells a human when a
+  document speaks to the model rather than to a reader. All 16 documents are
+  clean, which is the result worth recording: the rules are narrow enough to
+  stay quiet on a corpus full of the phrase "metodický pokyn".
+- `answer_log.py` appends every asked question to `ANSWER_DIR/asked.jsonl`
+  with its statements, quotes and checks - a golden entry in everything but
+  format, and real questions beat imagined ones.
+- `answer_cache.py` serves an identical question from disk: 22.9 s becomes
+  0.55 s. `grade_cache.py` does the same for grades, 7.1 s becomes 4 ms, and
+  the CLI, an evaluation run and the API share one directory.
+- Both caches key on a fingerprint of the manifest, so re-ingesting a report
+  invalidates what they hold. That is why `docker-compose.yml` mounts the
+  manifest into the API container: without it the container fingerprints an
+  empty corpus and shares nothing with the command line.
+- `GET /api/documents/{id}/pdf` serves the source report inline, so a citation
+  opens the page it names. Only the file name is resolved, inside
+  `REPORTS_INPUT_DIR`.
+- `POST /api/answer/stream` runs the same chain and sends each step as a
+  server-sent event. `answer()` takes an `on_progress` callback; the endpoint
+  runs the chain in a thread and drains a queue.
+
+Grading, the slowest step, was measured rather than tuned by feel, and the
+answer is that it cannot be made faster, only avoided:
+
+- **Smaller batches do not pay.** Median grading over five questions: 20x2 took
+  9.5 s, 10x4 took 8.5 s, 8x5 took 9.4 s, with single questions between 6 s and
+  17 s in every setting. Latency is mostly per call, not per candidate. Smaller
+  batches also move the grades themselves - 29 of 200 changed - because a batch
+  is graded in one prompt and its composition is the comparison set.
+- **Fewer candidates cost accuracy.** Over the golden set, 24 candidates
+  instead of 40 drop recall@5 from 0.92 to 0.89, recall@40 from 0.96 to 0.93,
+  MRR from 0.81 to 0.79, and close the gate on one more answerable question.
+  Forty stays.
+- **While measuring**, `candidates` turned out to control only how many
+  reranked hits came back, not how many were graded, so the option that exists
+  to lower the cost did not. It now means what it says in `compare()`,
+  `run_search()`, the CLI, the API and `eval_retrieval.py` (`--candidates`).
+
 ## Proposed next work
 
-In order of readiness. None has been started.
+Two items, and both cost a paid re-run over the corpus, so both are a decision
+rather than a task. Nothing else from the answering plan is open.
 
 **1. Aggregate `extra_fields` and settle the extraction schema.** Most ready.
 Extraction repeatedly reports the same keys across documents - `cislo_zakazky`,
@@ -257,8 +306,9 @@ promote fields and tighten `report_type` to a `Literal`. The procedure is in
 `.claude/skills/data-ingestion/SKILL.md` ("Evolving the extraction schema"):
 aggregate `extra_fields` and `missing_fields` in SQL, edit `schemas.py`, bump
 `SCHEMA_VERSION`, add an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration.
-Re-extraction reads cached Markdown, so no PDF is re-parsed - but every document
-is extracted again, which is paid.
+Re-extraction reads cached Markdown, so no PDF is re-parsed - but bumping
+`SCHEMA_VERSION` re-runs extract, chunk, embed and import for every document,
+and two of those four are paid.
 
 **2. Split bundles into their sub-reports.** Largest open structural issue.
 `GF_P188240_ZZ Sedmirohé 10 sond` is eleven reports under one cover (sub-report
@@ -267,46 +317,11 @@ is five. `_extract_toc` takes the first title for each section number across all
 contents blocks, so eleven outlines collapse into one of nine entries, and a
 sub-report's `3.2. Podzemní vody` lands after `8. Závěr` - 59 chunks of Sedmirohé
 and 21 of Metan jih sit under it. `check_pipeline.py --removed` shows the bundle
-at a glance: eleven separate contents blocks. The fix touches document identity
-(one source file, several `documents` rows), extraction (one call per
-sub-report) and citations, so it wants its own design first. A citation from a
-bundle currently names a section from the wrong sub-report.
-
-**3. The optional extras around answering.** Three are done and live on
-`feature/next-steps`: `injection_scan.py` tells a human when a document speaks
-to the model, `answer_log.py` keeps every asked question as JSONL so real
-questions can become the next golden set, and `answer_cache.py` serves an
-identical question from disk instead of paying for it again, and a citation
-links to the page of the source PDF: `GET /api/documents/{id}/pdf` serves the
-file inline, so the browser's own viewer honours `#page=N`, and the API
-resolves only the file name inside `REPORTS_INPUT_DIR`. `POST
-/api/answer/stream` runs the same chain and sends each step as a server-sent
-event, so the page says what is happening instead of spinning; the chain takes
-an `on_progress` callback and the endpoint runs it in a thread draining a
-queue. Grading, the slowest step, was measured rather than guessed
-(2026-09-16) and the answer is that it cannot be made faster, only avoided:
-
-- **Smaller batches do not pay.** Median grading over five questions: 20x2 took
-  9.5 s, 10x4 took 8.5 s, 8x5 took 9.4 s, with single questions between 6 s and
-  17 s in every setting. Latency is mostly per call, not per candidate. Smaller
-  batches also move the grades themselves - 29 of 200 changed - because a batch
-  is graded in one prompt and its composition is the comparison set.
-- **Fewer candidates cost accuracy.** Over the golden set, 24 candidates
-  instead of 40 drop recall@5 from 0.92 to 0.89, recall@40 from 0.96 to 0.93,
-  MRR from 0.81 to 0.79, and close the gate on one answerable question more.
-  Forty stays.
-- **So grades are kept.** `grade_cache.py` writes them under
-  `ANSWER_DIR/grades`, keyed by model, question and corpus fingerprint: a
-  question graded before costs 4 ms instead of 7 s, in any process. The CLI,
-  an evaluation run and the API share one directory, which is why the compose
-  file mounts the manifest into the container - without it the container
-  fingerprints an empty corpus and shares nothing.
-- While measuring, `candidates` turned out to control only how many reranked
-  hits came back, not how many were graded; it now does what it says, in
-  `compare()`, `run_search()`, the CLI, the API and `eval_retrieval.py`.
-
-What is left of this list: nothing that does not cost a paid re-run over the
-whole corpus. Items 1 and 2 above are both that.
+at a glance: eleven separate contents blocks. A citation from a bundle therefore
+names a section from the wrong sub-report, which is the user-visible cost of
+leaving it. The fix touches document identity (one source file, several
+`documents` rows), extraction (one call per sub-report) and citations, so it
+wants its own design first and a fresh ingest of both bundles.
 
 Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
 its annex has no form pages after the last heading, so there is no boundary to

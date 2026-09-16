@@ -671,6 +671,11 @@ a do korpusu se nedostaly.
 | **Kontrola citací** — `citation_check.py` | Gemini nemá API pro citace vlastních dokumentů, takže záruku dodělává server: každý citát musí být v citovaném úryvku a každé číslo věty ve zdrojích. Co neprojde, sníží stav odpovědi |
 | **Měření odpovědí** — `eval_answers.py` | Ukáže, jestli odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém mlčel tam, kde korpus odpověď nemá |
 | **Webové rozhraní** — záložka „Zeptat se dokumentů", expert panel | Kolegům se dá ukázat nejen výsledek, ale i cesta k němu: kandidáti, známky, brána, kontext, prompt a surová odpověď modelu před kontrolou |
+| **Kontrola vložených pokynů** — `injection_scan.py` v `check_pipeline.py` | Prompt injection se v promptu ošetřuje tím, že zdroje jsou data. Nikdo se ale nedozvěděl, že taková věta v korpusu je. Teď se to hlásí, a pravidla jsou úzká, aby „podle metodického pokynu MŽP" mlčelo |
+| **Cache odpovědí a známek** — `answer_cache.py`, `grade_cache.py` | Demo se ptá pořád stejně a platilo pokaždé. Stejná otázka je teď za 0,55 s místo 22,9 s, dřív ohodnocení kandidáti za 4 ms místo 7,1 s. Klíč drží i otisk korpusu, takže po novém ingestu se počítá znovu |
+| **Log otázek** — `answer_log.py` | Zlatou sadu psal člověk podle toho, co si myslel, že se kolegové zeptají. Skutečné otázky jsou lepší, a v logu jsou i s citáty a výsledkem kontroly, tedy přesně v podobě, jakou `golden.yaml` potřebuje |
+| **Odkaz z citace do PDF** — `GET /api/documents/{id}/pdf` | Citace uváděla stranu, ale dojít na ni znamenalo hledat soubor ručně. Teď je to odkaz a prohlížeč otevře přímo tu stranu |
+| **Průběh odpovědi** — `POST /api/answer/stream` | Deset až třicet sekund u jednoho spinneru vypadá jako zaseknutá stránka. Kroky se hlásí, jak nastávají, i s čísly |
 
 Naměřené výsledky jsou v sekcích [Měření kvality vyhledávání](#měření-kvality-vyhledávání)
 a [Odpovědi s citacemi](#odpovědi-s-citacemi). Ve zkratce: reranking zvedl
@@ -695,23 +700,29 @@ podkladu nedostala vymyšlenou odpověď.
 
 ### Další postup
 
-Nic z toho není potřeba k demu a každá položka stojí samostatně.
+Z osmi bodů, které tady stály, je šest hotových: kontrola vložených pokynů, log
+otázek, cache odpovědí, odkaz do PDF, průběh odpovědi a reranking. U rerankingu
+je závěr negativní a stojí za zapamatování — menší dávky nepomáhají, protože
+latence je na volání, ne na kandidáta, a méně kandidátů měřitelně zhoršuje
+výsledky (tabulka v [Měření kvality vyhledávání](#měření-kvality-vyhledávání)).
+Ušetřit šlo jen tím, že se stejná práce nedělá dvakrát.
 
-1. **Rozpad svazků na dílčí zprávy.** Největší otevřená strukturální věc: dotýká
-   se identity dokumentu (jeden soubor, víc řádků v `documents`), extrakce
-   (jedno volání na dílčí zprávu) i citací. Chce vlastní návrh.
-2. **Doladění extrakčního schématu.** `extra_fields` se opakují napříč posudky,
-   takže je poprvé dost dat povýšit je na sloupce a zúžit `report_type` na
-   `Literal`. Postup je v `.claude/skills/data-ingestion/SKILL.md`.
-3. **Zrychlení rerankingu.** Je to nejpomalejší krok, medián 6 s na dotaz.
-   Menší dávky nebo méně kandidátů, vždy s kontrolou na zlaté sadě.
-4. **Kontrola vložených pokynů při ingestu.** Prompt injection se dnes řeší až
-   při skládání promptu (zdroje jako JSON s escapovanými `<` a `>` a pravidlo,
-   že text je data). `check_pipeline.py` by uměl upozornit už při zpracování.
-5. **Odkaz z citace na stranu v PDF**, ne jen její číslo.
-6. **Průběh odpovědi přes SSE** místo jednoho spinneru po dobu 10 až 30 sekund.
-7. **Log průběhů do JSONL**, ať se ze skutečných otázek stane další zlatá sada.
-8. **Cache odpovědí**, aby se demo dalo zopakovat bez placení.
+Zbývají dvě věci a obě stojí placený přeběh celého korpusu, takže patří
+k rozhodnutí, ne k běžné práci:
+
+1. **Rozpad svazků na dílčí zprávy.** Největší otevřená strukturální věc.
+   `GF_P188240_ZZ Sedmirohé 10 sond` je jedenáct zpráv pod jedním přebalem
+   a `Metan jih` pět; jejich chunky sedí pod nadpisem z cizí dílčí zprávy,
+   takže i správně nalezený úryvek se cituje se špatnou sekcí. Dotýká se
+   identity dokumentu (jeden soubor, víc řádků v `documents`), extrakce (jedno
+   volání na dílčí zprávu) i citací, chce vlastní návrh a nové nahrání obou
+   svazků.
+2. **Doladění extrakčního schématu.** `cislo_zakazky`, `cislo_geofond`,
+   `hydrogeologicky_rajon`, `hloubka_vrtu` a `vystroj_vrtu` se opakují napříč
+   posudky, takže je poprvé dost dat povýšit je na sloupce a zúžit
+   `report_type` na `Literal`. Zvednutí `SCHEMA_VERSION` ale znamená znovu
+   extrahovat i zaembeddovat všech 16 posudků, což se platí. Postup je
+   v `.claude/skills/data-ingestion/SKILL.md`.
 
 ### Na co si dát pozor
 
