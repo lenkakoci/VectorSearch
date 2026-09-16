@@ -43,6 +43,7 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `import_reports.py` | JSON + parquet → PostgreSQL (upsert). |
 | `ingest.py` | Incremental orchestrator. The usual entry point. |
 | `check_pipeline.py` | Verifies each stage's artefacts. No API, writes nothing, exits 1 on failure. |
+| `injection_scan.py` | Finds chunk text that addresses a model rather than a reader. Pure text work, run by `check_pipeline.py`. |
 | `search_reports.py` | Vector, full-text and hybrid (RRF) search from the CLI. Argument parsing and printing only. |
 | `search_service.py` | The search itself as a library: SQL for every branch, query embedding with a cache, RRF with per-branch ranks, `ts_headline` highlights, neighbours, facets. Takes a connection, returns dicts. |
 | `search_api.py` | FastAPI over the service for the web demo (`frontend/`). Pydantic models, no search logic. Dependency group `api`, installed by default. |

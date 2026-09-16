@@ -10,6 +10,11 @@ is loud, but a report whose headings were never recognised imports perfectly and
 simply has no section citation, and a running footer that was not stripped just
 quietly pollutes every chunk. Those are what this looks for.
 
+One check is not about the pipeline at all: ``injection_scan.py`` reads the
+chunk text for sentences that address a model rather than a reader. The
+answering prompt already treats source text as data, but nothing else would
+ever tell a human that such a sentence sits in the corpus.
+
 Run from data/scripts:
     uv run python check_pipeline.py
     uv run python check_pipeline.py --only Roudno
@@ -31,6 +36,7 @@ from typing import Any
 import pandas as pd
 import psycopg2
 
+from injection_scan import scan_chunks, summarize
 from manifest import Manifest, timestamp_key
 from markdown_normalizer import MARKDOWN_VERSION, _signature
 from pipeline_common import (
@@ -328,6 +334,13 @@ def check_chunks(
     if list(frame["chunk_index"]) != expected:
         checks.append(Check("číslování chunků", WARN, "chunk_index není souvislá řada od 0"))
 
+    # A chunk is what reaches an answering prompt, so a sentence in it that
+    # addresses a model is worth a human's eye. The prompt treats source text
+    # as data either way; this is the only place that says such a sentence is
+    # in the corpus at all.
+    injections = scan_chunks(zip(frame["chunk_index"], frame["chunk_raw"]))
+    checks.append(_check("vložené pokyny", not injections, summarize(injections), warn_only=True))
+
     return checks, frame
 
 
@@ -476,7 +489,14 @@ def render_triage(
         (stem, c) for stem, checks in results for c in checks
         if c.status == FAIL and c.label != "markdown"
     ]
-    attention = [(stem, c) for stem, checks in results for c in checks if c.status == WARN]
+    injections = [
+        (stem, c) for stem, checks in results for c in checks
+        if c.label == "vložené pokyny" and c.status == WARN
+    ]
+    attention = [
+        (stem, c) for stem, checks in results for c in checks
+        if c.status == WARN and c.label != "vložené pokyny"
+    ]
     fine = [stem for stem, checks in results if verdict_of(checks) in (OK, TODO)]
 
     def block(title: str, rows: list[tuple[str, str]], action: str) -> None:
@@ -507,6 +527,11 @@ def render_triage(
         "chunky nedostanou citaci sekce; prohlédnout .md a případně nahlásit vzorec",
     )
     block("CHYBY", [(stem, f"{c.label}: {c.detail}") for stem, c in failed], "opravit před ingestem")
+    block(
+        "VĚTY MLUVÍCÍ K MODELU",
+        [(stem, c.detail) for stem, c in injections],
+        "přečíst úryvek očima; do promptu jdou zdroje jako data, ale takový text do korpusu nepatří",
+    )
     block(
         "STOJÍ ZA POHLED",
         [(stem, f"{c.label}: {c.detail}") for stem, c in attention],

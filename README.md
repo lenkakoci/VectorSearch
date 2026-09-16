@@ -145,6 +145,14 @@ paginace), mapu stránek, extrakci a její schéma, počet a velikost chunků, �
 shodu s databází, naplněný fulltextový index a nakonec zkusí slova ze středu
 dokumentu opravdu vyhledat.
 
+Navíc hledá v chunkách věty, které mluví k modelu, ne ke čtenáři: „ignoruj
+předchozí pokyny", přidělení role, diktovanou odpověď nebo napodobený systémový
+prompt, česky i anglicky. Do promptu jdou zdroje jako data, takže tohle není
+obrana, ale jediné místo, kde se člověk dozví, že taková věta v korpusu je.
+Pravidla jsou schválně úzká: běžné „podle metodického pokynu MŽP" nebo „podle
+pokynů objednatele" mlčí, protože hlásí se až sloveso rušící dřívější zadání.
+Dnes je všech 16 dokumentů čistých.
+
 `--triage` vypíše jen to, co potřebuje rozhodnutí, seskupené podle toho, co s tím
 dělat. `--removed` ukáže, co normalizátor z dokumentu smazal a podle jakého
 pravidla:
