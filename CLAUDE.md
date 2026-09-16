@@ -191,6 +191,60 @@ neither configuration works alone.
   checked as if they were a measured value. A false alarm costs the same as a
   miss here - it teaches the reader to ignore the flags.
 
+## What is built, and what it measured
+
+The chain from a question to a checked answer is in place: candidates from both
+branches, Gemini grading behind a relevance gate, a context of at most eight
+chunks, one answering call and a deterministic check of every sentence. The CLI
+(`ask_reports.py`), the API (`POST /api/answer`) and the page's second tab run
+that one chain in `answer_service.py`; none of them holds retrieval or
+answering logic of its own.
+
+Everything below is measured over `data/eval/golden.yaml`: 40 Czech questions
+covering morphology, exact codes, paraphrase, several documents, annex-only
+facts, and six with no answer in the corpus. Relevance is matched by text
+(`text_match.py`), not chunk id, so re-chunking does not invalidate the set,
+and `--check` verifies the set against the database for free.
+
+Retrieval (2026-09-13):
+
+| mode | recall@5 | recall@40 | MRR | answer not in top 40 |
+| --- | ---: | ---: | ---: | ---: |
+| hybrid | 0.66 | 0.87 | 0.54 | 4 of 34 |
+| rerank | 0.92 | 0.96 | 0.79 | 1 of 34 |
+
+Answers (2026-09-15): 28 answered, 4 partial, 2 insufficient, 6 no_evidence;
+the expected chunk reached the context for all 34 answerable questions and was
+cited for 31; 72 of 78 sentences passed the citation check; all 6 unanswerable
+questions were refused and none was answered from the model's own knowledge;
+median 13.8 s per question.
+
+Five findings worth keeping:
+
+- **Full text with AND semantics answers almost nothing asked as a question** -
+  3 of 34 in its top 40 - because `websearch_to_tsquery` ANDs every term. The
+  any-word full text ranked by summed BM25-style IDF (`fts_any`) reaches 0.88
+  recall@40 on its own, and it is what makes annex facts reachable at all.
+- **Candidates are the twenty best of each branch**, not the fused top 40.
+  Fusion structurally favours what both branches found and starved chunks only
+  full text finds, annex chunks above all; it cost two answers.
+- **The gate is what makes silence possible.** Grade 2 passed a relevant chunk
+  for 33 of 34 answerable questions and nothing for all 6 unanswerable ones,
+  and a closed gate means no model call at all - the cheapest refusal there is.
+- **A quote is a promise the server keeps.** Gemini has no citation API for our
+  own documents, so every sentence carries verbatim quotes and
+  `citation_check.py` looks for them in the chunk that was cited; a sentence
+  that fails downgrades the whole answer.
+- **The number check had to learn what a number is.** A digit glued to a letter
+  is a name (`HV1`), digits separated by spaces are one number in a table, and
+  a number read in the document header is supported - while page and section
+  numbers stay out, because they are small integers in the range the check
+  protects.
+
+Run `eval_retrieval.py` before and after every retrieval change, and
+`eval_answers.py` after every change to the prompt, the context or the check.
+Both cost API calls; both are cheaper than guessing.
+
 ## Proposed next work
 
 In order of readiness. None has been started.
@@ -206,42 +260,7 @@ aggregate `extra_fields` and `missing_fields` in SQL, edit `schemas.py`, bump
 Re-extraction reads cached Markdown, so no PDF is re-parsed - but every document
 is extracted again, which is paid.
 
-**2. Measure search quality.** In place for retrieval. `data/eval/golden.yaml`
-holds 40 Czech questions - morphology, exact codes, paraphrase, several
-documents, annex-only facts and six with no answer in the corpus - each with the
-document and a verbatim snippet of the chunk that answers it.
-`eval_retrieval.py` reports recall@k and MRR per search mode; `--check` verifies
-the set against the database for free. Relevance is matched by text
-(`text_match.py`), not chunk id, so re-chunking does not invalidate the set.
-Run it before and after every retrieval change, or its effect will be guessed
-again. `eval_answers.py` measures what happens after retrieval: the status of
-each answer, whether it cited the chunk the set names, how many sentences
-passed the citation check, and whether the system stayed silent where the
-corpus has no answer.
-
-The first run (2026-09-11) found that full text answers almost nothing asked
-as a question - 3 of 34 in its top 40 - because `websearch_to_tsquery` ANDs
-every term. The fix is an any-word full text ranked by IDF (`fts_any`), which
-alone reaches 0.88 recall@40, with `rerank` on top of it (2026-09-13):
-
-| mode | recall@5 | recall@40 | MRR | answer not in top 40 |
-| --- | ---: | ---: | ---: | ---: |
-| hybrid | 0.66 | 0.87 | 0.54 | 4 of 34 |
-| rerank | 0.92 | 0.96 | 0.79 | 1 of 34 |
-
-The gate (grade 2) let a relevant chunk through for 33 of 34 answerable
-questions and nothing through for all 6 unanswerable ones. Generation on top of
-it (2026-09-15): 28 answered, 4 partial, 2 insufficient, 6 no_evidence; the
-expected chunk reached the context for all 34 answerable questions and was
-cited for 31; 72 of 78 sentences passed the citation check; all 6 unanswerable
-questions were refused and none was answered from the model's own knowledge;
-median 13.8 s per question. Candidates are the
-twenty best of each branch, not the fused top 40: the fusion starved chunks
-only full text finds, annex chunks above all, and cost two answers. Grading
-takes a median of 6 s per query - two Gemini calls of 20 candidates - and is
-the slowest step; it is the next thing to shorten.
-
-**3. Split bundles into their sub-reports.** Largest open structural issue.
+**2. Split bundles into their sub-reports.** Largest open structural issue.
 `GF_P188240_ZZ Sedmirohé 10 sond` is eleven reports under one cover (sub-report
 cover pages at 1, 22, 43, 89, 108, 131, 150, 173, 197, 220, 242) and `Metan jih`
 is five. `_extract_toc` takes the first title for each section number across all
@@ -250,7 +269,23 @@ sub-report's `3.2. Podzemní vody` lands after `8. Závěr` - 59 chunks of Sedmi
 and 21 of Metan jih sit under it. `check_pipeline.py --removed` shows the bundle
 at a glance: eleven separate contents blocks. The fix touches document identity
 (one source file, several `documents` rows), extraction (one call per
-sub-report) and citations, so it wants its own design first.
+sub-report) and citations, so it wants its own design first. A citation from a
+bundle currently names a section from the wrong sub-report.
+
+**3. The optional extras around answering.** None of them is needed for the
+demo, and each stands alone:
+
+- `check_pipeline.py` could flag instruction-like text in an indexed document.
+  Prompt injection is handled at prompt time (sources are JSON with `<` and `>`
+  escaped, and the rules say the text is data), never at ingest.
+- A citation could link to the page in the PDF, not only name it.
+- The ten to thirty seconds of an answer could report progress over SSE instead
+  of one spinner.
+- Traces could be logged to JSONL, so real questions become the next golden set.
+- An answer cache would make a demo repeatable without paying for it twice.
+- Grading is the slowest step - median 6 s, two Gemini calls of 20 candidates -
+  and shortening it is the change with the most measurable payoff. Smaller
+  batches or fewer candidates, each verified on the golden set.
 
 Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
 its annex has no form pages after the last heading, so there is no boundary to

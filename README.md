@@ -2,15 +2,21 @@
 
 Interní pipeline, která z digitálních geologických posudků (PDF) vytáhne
 strukturovaná metadata, rozdělí text na chunky, spočítá embeddingy a uloží vše do
-PostgreSQL pro sémantické a hybridní vyhledávání.
+PostgreSQL pro sémantické a hybridní vyhledávání. Nad hledáním stojí druhý
+režim, který z nalezených úryvků složí odpověď a u každé věty nechá zdroj.
 
 ```
 PDF → Markdown → LLM strukturovaná extrakce → chunking → embedding → PostgreSQL
+
+dotaz → fulltext + vektor → reranking → brána relevance → kontext → odpověď
+                                                                    s ověřenými citacemi
 ```
 
 Vyhledávání je hybridní: vektorové (pgvector HNSW) a fulltextové s **českým
 slovníkem**, takže dotaz `vrty` najde i dokument, který píše `vrtů`. Výsledky se
 slučují přes Reciprocal Rank Fusion a citují se na úroveň sekce dokumentu.
+Odpověď smí říct jen to, co je ve zdrojích, a server u každé věty ověřuje
+doslovný citát i čísla.
 
 ## Předpoklady
 
@@ -385,8 +391,9 @@ uv run python search_reports.py --list --od 2019 --do 2020
 
 ### Co vyhledávání nedělá
 
-Vrací **pasáže, ne odpovědi** — úryvky seřazené podle relevance s citací sekce a
-strany. Odpověď si přečteš v nich.
+Vrací **pasáže, ne odpovědi** — úryvky seřazené podle relevance s citací sekce
+a strany. Odpověď z nich složí až druhý režim, popsaný v sekci
+[Odpovědi s citacemi](#odpovědi-s-citacemi), a taky jen z nich.
 
 Neagreguje. Na otázky typu „kolik posudků je od UNIGEO" nebo „které zmiňují
 třídu těžitelnosti" je nástrojem SQL nad `documents`, ne vyhledávání. Dotaz
@@ -601,9 +608,32 @@ co fungovalo dřív, jen přibývá skloňování.
 
 ## Stav
 
-Infrastruktura, chunking, embedding, import i vyhledávání jsou hotové a ověřené.
-V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez vektoru
-(dohledatelných fulltextem). Tři zdroje čekají na OCR a do korpusu se nedostaly.
+Hotová a ověřená je celá cesta od PDF k odpovědi: zpracování posudků, hybridní
+vyhledávání, reranking s bránou relevance, odpověď s ověřenými citacemi a webové
+demo nad obojím. V databázi je **16 dokumentů a 2040 chunků**, z toho 1015
+přílohových bez vektoru (dohledatelných fulltextem). Tři zdroje čekají na OCR
+a do korpusu se nedostaly.
+
+### Co bylo postaveno a co to vyřešilo
+
+| co přibylo | co to řeší |
+| --- | --- |
+| **Zlatá sada a měření** — `data/eval/golden.yaml` (40 otázek), `eval_retrieval.py` | Do té doby se kvalita hledání odhadovala. První běh ukázal, že fulltext najde odpověď na otázku jen ve 3 případech z 34, protože `websearch_to_tsquery` spojuje všechna slova pomocí AND |
+| **Volnější fulltext** — `fts_any`, řazený součtem IDF | Kandidáti pro reranking už nepotřebují všechna slova dotazu. Sám o sobě dosáhne recall@40 0,88 a je jediná cesta k faktům v přílohách, které nemají vektor |
+| **Reranking a brána** — `rerank_service.py`, známka 0–3 od Gemini, práh 2 | Vektor vrátí výsledky na cokoli, i na nesmyslný dotaz, a skóre RRF se na práh nehodí. Známka je srozumitelné měřítko, na které se dá dát práh — a zavřená brána znamená, že se generování vůbec nespustí |
+| **Výběr kandidátů po větvích** — 20 nejlepších z fulltextu a 20 z vektoru | Sloučené pořadí RRF systematicky nadržuje tomu, co našly obě větve, a vytlačovalo úryvky z příloh. Oprava přidala dvě správné odpovědi |
+| **Sestavení kontextu** — `context_builder.py` | Nejvýš 8 úryvků, 3 z jednoho posudku, strop 10 tisíc tokenů, soused u rozdělené sekce. Méně kontextu je lepší; zdroje jdou modelu jako JSON s escapovanými `<` a `>`, otázka až za nimi |
+| **Odpověď s pravidly** — `answer_prompts.py`, `answer_service.py`, `ask_reports.py`, `POST /api/answer` | Model odpovídá jen ze zdrojů, nepřevádí jednotky, nepřenáší zjištění mezi lokalitami a „nevím" je plnohodnotná odpověď (`insufficient`) |
+| **Kontrola citací** — `citation_check.py` | Gemini nemá API pro citace vlastních dokumentů, takže záruku dodělává server: každý citát musí být v citovaném úryvku a každé číslo věty ve zdrojích. Co neprojde, sníží stav odpovědi |
+| **Měření odpovědí** — `eval_answers.py` | Ukáže, jestli odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém mlčel tam, kde korpus odpověď nemá |
+| **Webové rozhraní** — záložka „Zeptat se dokumentů", expert panel | Kolegům se dá ukázat nejen výsledek, ale i cesta k němu: kandidáti, známky, brána, kontext, prompt a surová odpověď modelu před kontrolou |
+
+Naměřené výsledky jsou v sekcích [Měření kvality vyhledávání](#měření-kvality-vyhledávání)
+a [Odpovědi s citacemi](#odpovědi-s-citacemi). Ve zkratce: reranking zvedl
+recall@5 z 0,66 na 0,92 a MRR z 0,54 na 0,79, brána propustila relevantní úryvek
+u 33 z 34 zodpověditelných otázek a nepropustila nic u všech 6 nezodpověditelných,
+z vygenerovaných odpovědí prošlo kontrolou 72 vět ze 78 a žádná z otázek bez
+podkladu nedostala vymyšlenou odpověď.
 
 ### Otevřené věci
 
@@ -616,7 +646,28 @@ V databázi je **16 dokumentů a 2040 chunků**, z toho 1015 přílohových bez 
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
 | **Reranking je nejpomalejší krok** | ohodnocení 40 kandidátů trvá v mediánu 6 s, nejdéle 13 s | dvě volání Gemini po 20 kandidátech. Zkrátit jde menšími dávkami nebo menším počtem kandidátů, vždy s kontrolou na zlaté sadě |
 | **Režim Fulltext zůstává přísný** | na otázky v přirozeném jazyce najde odpověď jen u 3 z 34 | záměr: ve Vyhledávání ukazuje limity hledání podle slov. Kandidáti pro reranking používají volnější fulltext, který nevyžaduje všechna slova |
-| **Reranker** | nenasazeno | sousední chunky už vrací API (`/api/chunks/…/context`) a UI („Kontext ±1"); reranker má smysl až po opravě sekcí |
+| **Doslovný citát z tabulky v příloze** | občas neprojde kontrolou | model řádek tabulky přeformátuje, takže citát nesedí znak po znaku a věta zůstane označená jako neověřená, i když čísla souhlasí. Týká se 2 vět ze 78 |
+| **Citace ze svazku ukáže cizí sekci** | čeká na rozpad svazků | u Sedmirohé a Metan jih sedí chunky pod nadpisem z jiné dílčí zprávy, takže i správně nalezený úryvek se cituje se špatnou sekcí |
+
+### Další postup
+
+Nic z toho není potřeba k demu a každá položka stojí samostatně.
+
+1. **Rozpad svazků na dílčí zprávy.** Největší otevřená strukturální věc: dotýká
+   se identity dokumentu (jeden soubor, víc řádků v `documents`), extrakce
+   (jedno volání na dílčí zprávu) i citací. Chce vlastní návrh.
+2. **Doladění extrakčního schématu.** `extra_fields` se opakují napříč posudky,
+   takže je poprvé dost dat povýšit je na sloupce a zúžit `report_type` na
+   `Literal`. Postup je v `.claude/skills/data-ingestion/SKILL.md`.
+3. **Zrychlení rerankingu.** Je to nejpomalejší krok, medián 6 s na dotaz.
+   Menší dávky nebo méně kandidátů, vždy s kontrolou na zlaté sadě.
+4. **Kontrola vložených pokynů při ingestu.** Prompt injection se dnes řeší až
+   při skládání promptu (zdroje jako JSON s escapovanými `<` a `>` a pravidlo,
+   že text je data). `check_pipeline.py` by uměl upozornit už při zpracování.
+5. **Odkaz z citace na stranu v PDF**, ne jen její číslo.
+6. **Průběh odpovědi přes SSE** místo jednoho spinneru po dobu 10 až 30 sekund.
+7. **Log průběhů do JSONL**, ať se ze skutečných otázek stane další zlatá sada.
+8. **Cache odpovědí**, aby se demo dalo zopakovat bez placení.
 
 ### Na co si dát pozor
 
