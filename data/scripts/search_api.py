@@ -11,6 +11,7 @@ results.
     POST /api/compare                                    fts, vector and hybrid side by side,
                                                          and reranking when ``rerank`` is set
     POST /api/answer                                     a grounded answer with checked citations
+    POST /api/answer/stream                              the same answer, with progress as it happens
     GET  /api/chunks/{document_id}/{chunk_index}/context the chunks around a hit
     GET  /api/documents/{document_id}                    one report with its extraction
     GET  /api/documents/{document_id}/pdf                the source PDF, so a citation can open its page
@@ -32,8 +33,11 @@ Run from data/scripts:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import queue
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -43,7 +47,7 @@ from typing import Any, Literal
 import psycopg2
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import answer_log
@@ -501,6 +505,90 @@ def answer_question(request: AnswerRequest) -> AnswerResponse:
         )
     )
     return _answer_response(result)
+
+
+def _sse(event: str, payload: dict[str, Any]) -> str:
+    """Format one server-sent event: a named event and one line of JSON."""
+    data = json.dumps(payload, ensure_ascii=False, default=str)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+@router.post("/answer/stream")
+def answer_question_streamed(request: AnswerRequest) -> StreamingResponse:
+    """Answer a question and report every step while it happens.
+
+    The same chain as ``POST /api/answer``, and the same final payload, sent as
+    the ``answer`` event. What it adds is the waiting: grading forty candidates
+    and writing the answer take ten to thirty seconds, and a page that says
+    which of those is running now is a different experience from one spinner.
+
+    The chain is synchronous, so it runs in a thread and pushes its steps into
+    a queue that this generator drains. A client that disappears mid-answer
+    leaves the thread to finish and be garbage collected; nothing is written
+    twice, because the log and the cache are written inside the chain's own
+    call.
+    """
+    text, filters = _resolve(request.question, request.filters)
+    options = request.options
+    events: queue.Queue = queue.Queue()
+
+    def work() -> None:
+        try:
+            with connection() as conn:
+                result = answer(
+                    conn,
+                    text,
+                    filters,
+                    settings=SETTINGS,
+                    candidates=options.candidates,
+                    min_grade=options.min_grade,
+                    max_sources=options.max_sources,
+                    per_document=options.per_document,
+                    token_budget=options.token_budget,
+                    use_neighbours=options.neighbours,
+                    keep_prompt=options.trace,
+                    cache_dir=ANSWERS_DIR,
+                    fresh=options.fresh,
+                    on_progress=lambda step, payload: events.put(("progress", {"step": step, **payload})),
+                )
+            answer_log.append(
+                answer_log.record(
+                    result,
+                    source="api",
+                    filters=filters.as_dict(),
+                    options=options.model_dump(exclude_defaults=True),
+                )
+            )
+            events.put(("answer", _answer_response(result).model_dump(mode="json")))
+        except (EmbeddingUnavailable, RerankUnavailable, AnswerUnavailable) as exc:
+            events.put(("error", {"detail": str(exc), "kind": type(exc).__name__}))
+        except Exception as exc:  # noqa: BLE001 - the stream must say something and end
+            logger.exception("Odpověď ve streamu selhala")
+            events.put(("error", {"detail": str(exc), "kind": type(exc).__name__}))
+        finally:
+            events.put(None)
+
+    def stream() -> Iterator[str]:
+        thread = threading.Thread(target=work, name="answer-stream", daemon=True)
+        thread.start()
+        while True:
+            item = events.get()
+            if item is None:
+                return
+            name, payload = item
+            yield _sse(name, payload)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # nginx buffers a proxied response by default, which would hold
+            # every step until the answer is finished and defeat the point.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def source_pdf(name: str | None) -> Path | None:

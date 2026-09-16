@@ -488,6 +488,11 @@ Záložka **Zeptat se dokumentů** k tomu přidává:
 - **Expert: průběh odpovědi** (sbalený): kroky Dotaz → Fulltext → Vektor →
   Výběr kandidátů → Reranking → Brána → Kontext → Odpověď → Kontrola s počty
   a časy, k tomu přesný prompt a surová odpověď modelu před kontrolou.
+- **Průběh místo čekání**: dokud odpověď vzniká, stránka vypisuje kroky, jak
+  je server hlásí — kolik kandidátů dostalo známku, kolik jich prošlo branou,
+  kolik zdrojů a tokenů má kontext, že model píše a kolik vět prošlo kontrolou.
+  Jde o server-sent events z `POST /api/answer/stream`; když streamování
+  neprojde, stránka se vrátí k obyčejnému `POST /api/answer`.
 - **Nastavení**: počet zdrojů, minimální známka, sousední úryvky a „nová
   odpověď". Změna filtru odpověď nepřegeneruje — každá odpověď stojí volání
   modelu. Odpověď, která přišla z cache, je označená odznakem „z cache" a
@@ -499,7 +504,8 @@ povrchem` (jen význam), `ČSN 75 9010` (jen slova), `sonda S-2` s filtrem
 příloh (jen fulltext, přílohy nemají vektor).
 
 API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
-`POST /api/answer`, `/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`,
+`POST /api/answer`, `POST /api/answer/stream`,
+`/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`,
 `/api/documents/{id}/pdf`) má OpenAPI na
 `http://localhost:8010/docs`. Nemá autentizaci a v Compose je jen na
 `127.0.0.1` – posudky jsou interní.

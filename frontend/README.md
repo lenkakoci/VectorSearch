@@ -42,6 +42,9 @@ a **Zeptat se dokumentů** (odpověď s citacemi).
 - „Ve zdrojích chybí“ a „Rozpory mezi zdroji“, když je model vyplní.
 - Sbalený panel „Expert: průběh odpovědi“: kroky s počty a časy, přesný prompt
   a surová odpověď modelu před kontrolou.
+- Průběh odpovědi: dokud se odpovídá, vypisují se kroky tak, jak je server
+  hlásí přes server-sent events (`POST /api/answer/stream`). Bez streamování
+  se stránka vrátí k obyčejnému `POST /api/answer`.
 - Nastavení: počet zdrojů, minimální známka, sousední úryvky a „nová odpověď".
   Změna filtrů odpověď nepřegeneruje, protože každá odpověď stojí volání modelu.
 - Odznak „z cache" u odpovědi, kterou server vzal z uložených; expert panel
@@ -53,7 +56,7 @@ a **Zeptat se dokumentů** (odpověď s citacemi).
 | --- | --- |
 | `src/App.tsx` | stav stránky, kompozice |
 | `src/components/` | SearchBar, ModeSwitch, FilterPanel, MultiSelect, ActiveFilters, ResultList, ResultCard, ScoreBreakdown, ContextView, DocumentInfo, CompareView, DebugPanel |
-| `src/components/` (odpovědi) | AskView, AnswerCard, SourceList, PipelineTrace |
+| `src/components/` (odpovědi) | AskView, AnswerCard, AnswerProgress, SourceList, PipelineTrace |
 | `src/hooks/` | useSearch, useAnswer |
 | `src/lib/modes.ts` | popisy režimů laicky, ukázkové dotazy |
 | `src/lib/answers.ts` | stavy odpovědi, popisy kontrol a rolí, ukázkové otázky |

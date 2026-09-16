@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import search_api
+import json
 from dataclasses import replace
 
 import answer_log
@@ -377,3 +378,58 @@ def test_a_source_file_cannot_point_outside_the_input_directory(monkeypatch, tmp
     assert search_api.source_pdf("poznamky.txt") is None
     assert search_api.source_pdf(None) is None
     assert search_api.source_pdf("PDFs/posudek.pdf") == (tmp_path / "posudek.pdf").resolve()
+
+
+def _events(body: str) -> list[tuple[str, dict]]:
+    """Parse an SSE body into (event, payload) pairs."""
+    out = []
+    for frame in body.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in frame.splitlines())
+        out.append((lines["event"], json.loads(lines["data"])))
+    return out
+
+
+def test_the_stream_reports_every_step_and_then_the_answer(client, monkeypatch):
+    """A page waiting twenty seconds should be told what is happening."""
+
+    def fake_answer(conn, question, filters, **kwargs):
+        report = kwargs["on_progress"]
+        report("start", {"question": question})
+        report("retrieval", {"candidates": 40, "graded": 40})
+        report("gate", {"passed": 4, "candidates": 40, "min_grade": 2})
+        report("context", {"sources": 8, "tokens": 4704})
+        report("generation", {"model": "gemini-test"})
+        report("validation", {"statements": 1, "verified": 1})
+        return _answer_result()
+
+    monkeypatch.setattr(search_api, "answer", fake_answer)
+    response = client.post("/api/answer/stream", json={"question": "Kolik vrtů se navrhuje?"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+
+    events = _events(response.text)
+    assert [name for name, _ in events] == ["progress"] * 6 + ["answer"]
+    assert [payload["step"] for name, payload in events if name == "progress"] == [
+        "start",
+        "retrieval",
+        "gate",
+        "context",
+        "generation",
+        "validation",
+    ]
+    answer_payload = events[-1][1]
+    assert answer_payload["status"] == "answered"
+    assert answer_payload["statements"][0]["check"] == "verified"
+    assert answer_payload["sources"][0]["cited"] is True
+
+
+def test_the_stream_ends_with_an_error_event_when_the_model_is_down(client, monkeypatch):
+    def failing(*args, **kwargs):
+        raise AnswerUnavailable("ServerError: 503")
+
+    monkeypatch.setattr(search_api, "answer", failing)
+    events = _events(client.post("/api/answer/stream", json={"question": "Kolik vrtů?"}).text)
+    assert [name for name, _ in events] == ["error"]
+    assert events[0][1]["kind"] == "AnswerUnavailable"

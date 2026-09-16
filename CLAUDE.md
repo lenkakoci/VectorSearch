@@ -279,10 +279,12 @@ questions can become the next golden set, and `answer_cache.py` serves an
 identical question from disk instead of paying for it again, and a citation
 links to the page of the source PDF: `GET /api/documents/{id}/pdf` serves the
 file inline, so the browser's own viewer honours `#page=N`, and the API
-resolves only the file name inside `REPORTS_INPUT_DIR`. What is left:
+resolves only the file name inside `REPORTS_INPUT_DIR`. `POST
+/api/answer/stream` runs the same chain and sends each step as a server-sent
+event, so the page says what is happening instead of spinning; the chain takes
+an `on_progress` callback and the endpoint runs it in a thread draining a
+queue. What is left:
 
-- The ten to thirty seconds of an answer could report progress over SSE instead
-  of one spinner.
 - Grading is the slowest step - median 6 s, two Gemini calls of 20 candidates -
   and shortening it is the change with the most measurable payoff. Smaller
   batches or fewer candidates, each verified on the golden set.

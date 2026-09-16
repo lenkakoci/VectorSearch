@@ -118,4 +118,25 @@ describe('a question the corpus cannot answer', () => {
     const html = render(<AskView state={{ status: 'loading' }} expertOpen={false} onExpert={() => undefined} />)
     expect(html).toContain('Hledám podklady')
   })
+
+  it('reports each step of the chain as the server announces it', () => {
+    const html = render(
+      <AskView
+        state={{
+          status: 'loading',
+          progress: [
+            { step: 'start', candidates: 40 },
+            { step: 'gate', passed: 4, candidates: 40, min_grade: 2 },
+            { step: 'context', sources: 8, tokens: 4704 },
+            { step: 'generation', model: 'gemini-3.7-flash' },
+          ],
+        }}
+        expertOpen={false}
+        onExpert={() => undefined}
+      />,
+    )
+    expect(html).toContain('Branou relevance prošlo 4 z 40')
+    expect(html).toContain('Kontext: 8 zdrojů, 4704 tokenů')
+    expect(html).toContain('gemini-3.7-flash skládá odpověď')
+  })
 })

@@ -28,6 +28,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from google.genai import types
@@ -60,6 +61,11 @@ from search_service import CANDIDATES, RERANK_MODE, SearchResult, compare, neigh
 logger = logging.getLogger(__name__)
 
 NO_EVIDENCE = "no_evidence"
+
+# The steps ``on_progress`` reports, in the order they happen. A question that
+# is cached reports "cache" and nothing else; one that fails the gate stops
+# after "gate".
+PROGRESS_STEPS = ("start", "cache", "retrieval", "gate", "context", "generation", "validation")
 BELOW_GATE_ROLE = "pod prahem"
 FALLBACK_SOURCES = 5
 
@@ -149,6 +155,24 @@ def _retrieval_trace(search: SearchResult) -> dict[str, Any]:
     return {key: search.debug[key] for key in wanted if key in search.debug}
 
 
+def _reporter(on_progress: Callable[[str, dict[str, Any]], None] | None):
+    """Return a function that reports one step, swallowing callback failures.
+
+    The caller of an answer is usually a stream that can drop; that must cost
+    the progress line, never the answer.
+    """
+
+    def report(step: str, **payload: Any) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(step, payload)
+        except Exception:  # noqa: BLE001 - a broken listener is not an error here
+            logger.debug("Posluchač průběhu selhal na kroku %s", step, exc_info=True)
+
+    return report
+
+
 def _from_cache(payload: dict[str, Any], *, keep_prompt: bool) -> AnswerResult | None:
     """Rebuild an answer stored earlier; None when the payload is unusable.
 
@@ -194,6 +218,7 @@ def answer(
     keep_prompt: bool = True,
     cache_dir: Path | None = None,
     fresh: bool = False,
+    on_progress: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> AnswerResult:
     """Answer one question from the corpus.
 
@@ -203,6 +228,11 @@ def answer(
     a fingerprint of the corpus, so nothing that would change the answer is
     ignored. ``fresh`` skips reading what is stored and replaces it, which is
     how a demo asks for the model to be run again.
+
+    ``on_progress`` is called with a step name and its numbers as the chain
+    moves, so a caller can show where an answer is rather than one spinner for
+    the whole half-minute. The steps are in ``PROGRESS_STEPS``; a failure
+    inside the callback never stops the answer.
 
     Raises:
         ValueError: On an empty question.
@@ -216,6 +246,8 @@ def answer(
     settings = settings or load_settings()
     filters = filters or Filters()
     started = time.perf_counter()
+    report = _reporter(on_progress)
+    report("start", question=question, candidates=candidates)
 
     cache_key: str | None = None
     if cache_dir is not None:
@@ -239,6 +271,7 @@ def answer(
             cached = _from_cache(stored, keep_prompt=keep_prompt)
             if cached is not None:
                 logger.info("Odpověď na %r je z cache, model se nevolá", question)
+                report("cache", hit=True, status=cached.status, statements=len(cached.statements))
                 return cached
 
     search = compare(
@@ -259,6 +292,15 @@ def answer(
         "rerank": search.debug.get("rerank"),
         "gate": {"min_grade": min_grade, "candidates": len(hits), "passed": len(passed)},
     }
+    rerank_stats = search.debug.get("rerank") or {}
+    report(
+        "retrieval",
+        candidates=len(hits),
+        graded=rerank_stats.get("graded"),
+        cached=rerank_stats.get("cached"),
+        ms=rerank_stats.get("ms"),
+    )
+    report("gate", passed=len(passed), candidates=len(hits), min_grade=min_grade)
 
     if not passed:
         logger.info("Gate closed for %r: no candidate reached grade %d", question, min_grade)
@@ -291,7 +333,15 @@ def answer(
         max_neighbours=max_neighbours,
     )
     trace["context"] = context.stats
+    report(
+        "context",
+        sources=context.stats.get("sources"),
+        tokens=context.stats.get("tokens"),
+        neighbours=context.stats.get("neighbours"),
+        documents=context.stats.get("documents"),
+    )
 
+    report("generation", model=settings.answer_model)
     started_model = time.perf_counter()
     try:
         raw = call_model(settings.answer_model, context.prompt)
@@ -320,6 +370,13 @@ def answer(
     }
     trace["validation"] = summary
     trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    report(
+        "validation",
+        statements=summary["statements"],
+        verified=summary["verified"],
+        status=status,
+        ms=generation_ms,
+    )
     if keep_prompt:
         trace["prompt"] = context.prompt
         trace["raw_answer"] = raw.model_dump()

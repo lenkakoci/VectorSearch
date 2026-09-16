@@ -4,6 +4,7 @@ import type { AnswerState } from '../hooks/useAnswer'
 import { anchorOf } from '../lib/answers'
 import type { CheckedStatement } from '../types'
 import { AnswerCard } from './AnswerCard'
+import { AnswerProgress } from './AnswerProgress'
 import { PipelineTrace } from './PipelineTrace'
 import { SourceList, type Highlighted } from './SourceList'
 
@@ -49,12 +50,15 @@ export function AskView({ state, expertOpen, onExpert }: Props) {
 
   if (state.status === 'loading') {
     return (
-      <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
-        <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
-        <div className="text-sm">
-          <p className="font-medium text-slate-700">Hledám podklady a skládám odpověď…</p>
-          <p className="text-slate-500">Nejdřív 40 kandidátů dostane známku, pak z nich vzniká odpověď. Deset až třicet sekund.</p>
+      <div className="rounded-lg border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+          <div className="text-sm">
+            <p className="font-medium text-slate-700">Hledám podklady a skládám odpověď…</p>
+            <p className="text-slate-500">Nejdřív 40 kandidátů dostane známku, pak z nich vzniká odpověď. Deset až třicet sekund.</p>
+          </div>
         </div>
+        <AnswerProgress steps={state.progress ?? []} />
       </div>
     )
   }
