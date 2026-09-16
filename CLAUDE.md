@@ -276,9 +276,11 @@ bundle currently names a section from the wrong sub-report.
 `feature/next-steps`: `injection_scan.py` tells a human when a document speaks
 to the model, `answer_log.py` keeps every asked question as JSONL so real
 questions can become the next golden set, and `answer_cache.py` serves an
-identical question from disk instead of paying for it again. What is left:
+identical question from disk instead of paying for it again, and a citation
+links to the page of the source PDF: `GET /api/documents/{id}/pdf` serves the
+file inline, so the browser's own viewer honours `#page=N`, and the API
+resolves only the file name inside `REPORTS_INPUT_DIR`. What is left:
 
-- A citation could link to the page in the PDF, not only name it.
 - The ten to thirty seconds of an answer could report progress over SSE instead
   of one spinner.
 - Grading is the slowest step - median 6 s, two Gemini calls of 20 candidates -

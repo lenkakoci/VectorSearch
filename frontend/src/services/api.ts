@@ -50,4 +50,7 @@ export const api = {
   context: (documentId: string, chunkIndex: number, before = 1, after = 1) =>
     request<ContextResponse>(`/chunks/${documentId}/${chunkIndex}/context?before=${before}&after=${after}`),
   document: (documentId: string) => request<DocumentDetail>(`/documents/${documentId}`),
+  // Not fetched but linked: the browser's own viewer opens the page in #page.
+  pdfUrl: (documentId: string, page?: number | null) =>
+    `${BASE}/documents/${documentId}/pdf` + (page ? `#page=${page}` : ''),
 }

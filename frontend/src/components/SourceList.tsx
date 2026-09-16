@@ -5,6 +5,7 @@ import { anchorOf, pagesOf, ROLE_INFO } from '../lib/answers'
 import { QuoteHighlight } from '../lib/highlight'
 import { MAX_GRADE } from '../lib/modes'
 import type { AnswerSource } from '../types'
+import { api } from '../services/api'
 import { ContextView } from './ContextView'
 import { DocumentInfo } from './DocumentInfo'
 
@@ -141,6 +142,15 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
         </button>
         {action('Kontext ±1', 'context')}
         {action('O dokumentu', 'document')}
+        <a
+          href={api.pdfUrl(source.document_id, source.page_from)}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded px-2 py-0.5 text-blue-700 hover:bg-slate-100"
+          title="Otevře zdrojové PDF na straně, kterou citace uvádí"
+        >
+          {source.page_from ? `PDF, s. ${source.page_from}` : 'PDF'}
+        </a>
       </div>
 
       {panel === 'context' && (

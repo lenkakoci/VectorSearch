@@ -13,6 +13,7 @@ results.
     POST /api/answer                                     a grounded answer with checked citations
     GET  /api/chunks/{document_id}/{chunk_index}/context the chunks around a hit
     GET  /api/documents/{document_id}                    one report with its extraction
+    GET  /api/documents/{document_id}/pdf                the source PDF, so a citation can open its page
 
 Reranking calls Gemini for every candidate not graded before, so
 ``/api/compare`` runs it only on request. A reranking failure there leaves the
@@ -42,11 +43,14 @@ from typing import Any, Literal
 import psycopg2
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import answer_log
 from answer_service import AnswerResult, AnswerUnavailable, answer
 from context_builder import MAX_SOURCES, PER_DOCUMENT, TOKEN_BUDGET
+from pathlib import Path
+
 from pipeline_common import ANSWERS_DIR, configure_logging, load_connection_params, load_settings
 from rerank_service import MAX_GRADE, MIN_GRADE, RerankUnavailable
 from search_filters import Filters, build_filters, parse_query
@@ -497,6 +501,46 @@ def answer_question(request: AnswerRequest) -> AnswerResponse:
         )
     )
     return _answer_response(result)
+
+
+def source_pdf(name: str | None) -> Path | None:
+    """Return the PDF a document was made from, or None when it is not there.
+
+    Only the file name from the database is used and it is resolved inside the
+    configured input directory, so a crafted ``source_file`` cannot reach out
+    of it. A corpus built from Markdown, or one whose PDFs live elsewhere than
+    this machine, simply has no file to serve.
+    """
+    if not name:
+        return None
+    root = SETTINGS.input_dir.resolve()
+    candidate = (root / Path(str(name)).name).resolve()
+    if candidate.parent != root or candidate.suffix.lower() != ".pdf" or not candidate.is_file():
+        return None
+    return candidate
+
+
+@router.get("/documents/{document_id}/pdf")
+def document_pdf(document_id: str) -> FileResponse:
+    """Serve the source PDF inline, so a citation can open the page it names.
+
+    The browser's own viewer honours ``#page=N``, so the page number a chunk
+    carries becomes a link rather than an instruction to scroll.
+    """
+    document_id = _parse_uuid(document_id)
+    with connection() as conn:
+        document = get_document(conn, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Dokument neexistuje")
+    path = source_pdf(document.get("source_file"))
+    if path is None:
+        raise HTTPException(status_code=404, detail="Zdrojové PDF není k dispozici")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=path.name,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/chunks/{document_id}/{chunk_index}/context", response_model=ContextResponse)

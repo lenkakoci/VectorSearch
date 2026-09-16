@@ -434,8 +434,9 @@ cd frontend;      npm install; npm run dev        # http://localhost:5173
 ```
 
 V Dockeru vedle databáze (obrazy se staví z `data/scripts/Dockerfile.api`
-a `frontend/Dockerfile`; API čte `data/scripts/.env` a má připojený adresář
-`data/processed/answers`, kam píše log otázek a cache odpovědí):
+a `frontend/Dockerfile`; API čte `data/scripts/.env`, má připojený adresář
+`data/processed/answers`, kam píše log otázek a cache odpovědí, a `data/PDFs`
+jen pro čtení, aby mohlo posílat zdrojová PDF):
 
 ```powershell
 cd deploy\local
@@ -465,7 +466,8 @@ Co stránka umí:
   vypínač, výběr se při vypnutí neztratí. Inline prefixy v dotazu fungují také.
 - **Karta výsledku**: název, cesta sekce, strana, chunk, skóre, celý text,
   kontext ±1 chunk (sousedé v pořadí dokumentu), metadata dokumentu, rozpis
-  „proč nalezeno" (pořadí a skóre v každé větvi, dosazený vzorec RRF).
+  „proč nalezeno" (pořadí a skóre v každé větvi, dosazený vzorec RRF) a odkaz
+  „PDF, s. X", který otevře zdrojový posudek rovnou na té straně.
 - **Expert / debug** (sbalený): požadavek, lexémy `tsquery` v obou
   konfiguracích, SQL a parametry filtrů, časy, počty kandidátů, tabulka
   pořadí × skóre.
@@ -480,7 +482,8 @@ Záložka **Zeptat se dokumentů** k tomu přidává:
   neprošla, je podtržená vlnovkou s vysvětlením proč.
 - **Zdroje**: citované rozbalené, ostatní sbalené. Karta nese známku od
   rerankeru, roli (`nalezeno`, `kontext`, `pod prahem`), sekci, stranu, chunk,
-  metadata, kontext ±1 a údaje o dokumentu.
+  metadata, kontext ±1, údaje o dokumentu a odkaz „PDF, s. X" na tu stranu
+  zdrojového posudku.
 - **Ve zdrojích chybí** a **Rozpory mezi zdroji**, když je model vyplní.
 - **Expert: průběh odpovědi** (sbalený): kroky Dotaz → Fulltext → Vektor →
   Výběr kandidátů → Reranking → Brána → Kontext → Odpověď → Kontrola s počty
@@ -496,8 +499,8 @@ povrchem` (jen význam), `ČSN 75 9010` (jen slova), `sonda S-2` s filtrem
 příloh (jen fulltext, přílohy nemají vektor).
 
 API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
-`POST /api/answer`, `/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`)
-má OpenAPI na
+`POST /api/answer`, `/api/chunks/{doc}/{index}/context`, `/api/documents/{id}`,
+`/api/documents/{id}/pdf`) má OpenAPI na
 `http://localhost:8010/docs`. Nemá autentizaci a v Compose je jen na
 `127.0.0.1` – posudky jsou interní.
 

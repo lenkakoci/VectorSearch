@@ -42,11 +42,15 @@ services:
       PGPORT: "5432"
       CORS_ORIGINS: http://localhost:3001,http://localhost:5173
       ANSWER_DIR: /app/answers
+      REPORTS_INPUT_DIR: /app/PDFs
     volumes:
       # What people asked through the page, and the answers already paid for.
       # The image carries no processed directory, so without this bind mount
       # both would live inside the container and die with the next rebuild.
       - ../../data/processed/answers:/app/answers
+      # The source reports, read-only: a citation links to the page of the PDF
+      # it came from, and the API serves that file. Nothing here writes to them.
+      - ../../data/PDFs:/app/PDFs:ro
     ports:
       # Loopback only: the reports are internal and the API has no authentication.
       - "127.0.0.1:8010:8010"

@@ -37,7 +37,8 @@ a **Zeptat se dokumentů** (odpověď s citacemi).
 - Citace jako tlačítka: klik sjede na zdroj a zvýrazní v něm ověřený citát.
   Neověřená věta je podtržená vlnovkou a nese důvod od kontroly.
 - Zdroje: citované rozbalené, ostatní sbalené; známka od rerankeru, role
-  (`nalezeno`, `kontext`, `pod prahem`), sekce, strana, chunk, kontext ±1.
+  (`nalezeno`, `kontext`, `pod prahem`), sekce, strana, chunk, kontext ±1
+  a odkaz „PDF, s. X", který otevře zdrojový posudek na dané straně.
 - „Ve zdrojích chybí“ a „Rozpory mezi zdroji“, když je model vyplní.
 - Sbalený panel „Expert: průběh odpovědi“: kroky s počty a časy, přesný prompt
   a surová odpověď modelu před kontrolou.

@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { ChevronRight } from 'lucide-react'
 import { useState } from 'react'
 import { Highlight } from '../lib/highlight'
+import { api } from '../services/api'
 import { formatModeScore, MAX_GRADE, MODE_INFO, scoreOf } from '../lib/modes'
 import type { Branch, Hit, Mode } from '../types'
 import { ContextView } from './ContextView'
@@ -178,6 +179,15 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
         {action('Kontext ±1', 'context')}
         {action('O dokumentu', 'document')}
         {action('Proč nalezeno', 'why')}
+        <a
+          href={api.pdfUrl(hit.document_id, hit.page_from)}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded px-2 py-0.5 text-blue-700 hover:bg-slate-100"
+          title="Otevře zdrojové PDF na straně tohoto úryvku"
+        >
+          {hit.page_from ? `PDF, s. ${hit.page_from}` : 'PDF'}
+        </a>
       </div>
 
       {panel === 'context' && (

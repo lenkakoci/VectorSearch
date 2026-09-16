@@ -73,6 +73,13 @@ describe('the sources under the answer', () => {
     expect(html).toContain('chunk #')
   })
 
+  it('links to the page of the PDF the source was cut from', () => {
+    const html = render(<SourceList sources={answer.sources} highlight={null} />)
+    const source = answer.sources.find((item) => item.page_from)!
+    expect(html).toContain(`/api/documents/${source.document_id}/pdf#page=${source.page_from}`)
+    expect(html).toContain(`PDF, s. ${source.page_from}`)
+  })
+
   it('highlights the quote inside the source a citation points at', () => {
     const html = render(<SourceList sources={answer.sources} highlight={{ id: first.source_ids[0], quotes: first.quotes }} />)
     expect(html).toContain('<mark')

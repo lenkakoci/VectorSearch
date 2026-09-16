@@ -14,6 +14,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import search_api
+from dataclasses import replace
+
 import answer_log
 from answer_service import AnswerResult, AnswerUnavailable
 from rerank_service import RerankUnavailable
@@ -338,3 +340,40 @@ def test_health_reports_counts(client, monkeypatch):
     assert client.get("/api/health").json() == {
         "status": "ok", "documents": 16, "chunks": 2040, "chunks_with_vector": 1025,
     }
+
+def test_the_source_pdf_is_served_inline(client, monkeypatch, tmp_path):
+    """A citation links to the PDF, and the browser's viewer needs it inline."""
+    pdf = tmp_path / "posudek.pdf"
+    pdf.write_bytes(b"%PDF-1.4 obsah")
+    monkeypatch.setattr(search_api, "SETTINGS", replace(search_api.SETTINGS, input_dir=tmp_path))
+    monkeypatch.setattr(
+        search_api,
+        "get_document",
+        lambda conn, document_id: {"id": document_id, "source_file": "PDFs/posudek.pdf"},
+    )
+    response = client.get("/api/documents/30804a28-36a8-5080-b306-a2c737f7cd47/pdf")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.content == b"%PDF-1.4 obsah"
+
+
+def test_a_document_without_its_pdf_answers_404(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(search_api, "SETTINGS", replace(search_api.SETTINGS, input_dir=tmp_path))
+    monkeypatch.setattr(
+        search_api,
+        "get_document",
+        lambda conn, document_id: {"id": document_id, "source_file": "PDFs/chybi.pdf"},
+    )
+    assert client.get("/api/documents/30804a28-36a8-5080-b306-a2c737f7cd47/pdf").status_code == 404
+
+
+def test_a_source_file_cannot_point_outside_the_input_directory(monkeypatch, tmp_path):
+    """Only the file name is used, so a crafted path resolves inside the corpus."""
+    (tmp_path / "posudek.pdf").write_bytes(b"%PDF")
+    monkeypatch.setattr(search_api, "SETTINGS", replace(search_api.SETTINGS, input_dir=tmp_path))
+    assert search_api.source_pdf("../../../etc/passwd") is None
+    assert search_api.source_pdf("PDFs/../../secret.pdf") is None
+    assert search_api.source_pdf("poznamky.txt") is None
+    assert search_api.source_pdf(None) is None
+    assert search_api.source_pdf("PDFs/posudek.pdf") == (tmp_path / "posudek.pdf").resolve()
