@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import search_api
+import answer_log
 from answer_service import AnswerResult, AnswerUnavailable
 from rerank_service import RerankUnavailable
 from search_service import EmbeddingUnavailable, SearchResult
@@ -82,6 +83,12 @@ def _result(query, mode, limit=10, hits=None, debug=None):
         query=query, mode=mode, limit=limit, fetch=limit, hits=hits if hits is not None else [_hit()],
         debug=debug or {"tsquery": {"czech": "'vrt'", "czech_literal": "'vrty'"}, "filters": ""},
     )
+
+
+@pytest.fixture(autouse=True)
+def log_elsewhere(tmp_path, monkeypatch):
+    """Answering appends to a JSONL log; no test may write into data/processed."""
+    monkeypatch.setattr(answer_log, "ANSWERS_DIR", tmp_path)
 
 
 def _answer_result(status="answered", statements=None, sources=None, trace=None):

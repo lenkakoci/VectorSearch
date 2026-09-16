@@ -22,6 +22,10 @@ MARKDOWN_DIR = PROCESSED_DIR / "markdown"
 EXTRACTED_DIR = PROCESSED_DIR / "extracted"
 CHUNKS_DIR = PROCESSED_DIR / "chunks"
 MANIFEST_PATH = PROCESSED_DIR / "manifest.json"
+# Where answers asked by people are kept: the JSONL log of what was asked and
+# the cache of answers already paid for. In Docker the API has no processed
+# directory of its own, so ANSWER_DIR points at a bind mount instead.
+ANSWERS_DIR = Path(os.getenv("ANSWER_DIR") or PROCESSED_DIR / "answers")
 
 SUPPORTED_SUFFIXES = {".pdf", ".md", ".markdown"}
 

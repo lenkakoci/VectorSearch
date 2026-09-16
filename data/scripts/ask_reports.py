@@ -25,10 +25,11 @@ from typing import Any
 
 import psycopg2
 
+import answer_log
 from answer_service import NO_EVIDENCE, AnswerResult, AnswerUnavailable, answer
 from citation_check import VERIFIED
 from context_builder import MAX_SOURCES, PER_DOCUMENT, TOKEN_BUDGET
-from pipeline_common import configure_logging, load_connection_params, load_settings
+from pipeline_common import ANSWERS_DIR, configure_logging, load_connection_params, load_settings
 from rerank_service import MAX_GRADE, MIN_GRADE, RerankUnavailable
 from search_filters import add_filter_arguments, filters_from_query_and_args
 from search_service import CANDIDATES, EmbeddingUnavailable
@@ -124,6 +125,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-neighbours", action="store_true", help="Do not add neighbouring chunks of split sections")
     parser.add_argument("--show-prompt", action="store_true", help="Print the prompt the model received")
     parser.add_argument("--json", action="store_true", dest="as_json", help="Print the whole result as JSON")
+    parser.add_argument("--no-log", action="store_true", help="Do not append this answer to the JSONL log")
+    parser.add_argument("--fresh", action="store_true", help="Ignore a stored answer and pay for a new one")
+    parser.add_argument("--no-cache", action="store_true", help="Neither read nor write the answer cache")
     add_filter_arguments(parser)
     return parser.parse_args(argv)
 
@@ -152,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
             token_budget=args.token_budget,
             per_document=args.per_document,
             use_neighbours=not args.no_neighbours,
+            cache_dir=None if args.no_cache else ANSWERS_DIR,
+            fresh=args.fresh,
         )
     except EmbeddingUnavailable as exc:
         logger.error("Could not embed the question (%s).", exc)
@@ -164,6 +170,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         connection.close()
+
+    # Real questions are the raw material of the next golden set, so what was
+    # asked is kept even when the answer itself is read once and forgotten.
+    if not args.no_log:
+        answer_log.append(answer_log.record(result, source="cli", filters=filters.as_dict()))
 
     if args.as_json:
         print(json.dumps(result.__dict__, ensure_ascii=False, indent=2, default=str))

@@ -434,7 +434,8 @@ cd frontend;      npm install; npm run dev        # http://localhost:5173
 ```
 
 V Dockeru vedle databáze (obrazy se staví z `data/scripts/Dockerfile.api`
-a `frontend/Dockerfile`; API čte `data/scripts/.env`):
+a `frontend/Dockerfile`; API čte `data/scripts/.env` a má připojený adresář
+`data/processed/answers`, kam píše log otázek a cache odpovědí):
 
 ```powershell
 cd deploy\local
@@ -484,8 +485,10 @@ Záložka **Zeptat se dokumentů** k tomu přidává:
 - **Expert: průběh odpovědi** (sbalený): kroky Dotaz → Fulltext → Vektor →
   Výběr kandidátů → Reranking → Brána → Kontext → Odpověď → Kontrola s počty
   a časy, k tomu přesný prompt a surová odpověď modelu před kontrolou.
-- **Nastavení**: počet zdrojů, minimální známka a sousední úryvky. Změna filtru
-  odpověď nepřegeneruje — každá odpověď stojí volání modelu.
+- **Nastavení**: počet zdrojů, minimální známka, sousední úryvky a „nová
+  odpověď". Změna filtru odpověď nepřegeneruje — každá odpověď stojí volání
+  modelu. Odpověď, která přišla z cache, je označená odznakem „z cache" a
+  v expert panelu je vidět, že se model nevolal.
 
 Ukázkové dotazy jsou v poli jako tlačítka: `hladina podzemní vody` (najdou
 všechny tři), `vrty pro tepelné čerpadlo` (skloňování), `kde je voda blízko pod
@@ -570,6 +573,17 @@ výběr důkazů, jedno volání modelu a strojová kontrola odpovědi.
 - **Model** nastavuje `GEMINI_ANSWER_MODEL`, výchozí je `GEMINI_MODEL`.
   Odpovídá se s teplotou 0 a prompt má vlastní verzi, která jde s každou
   odpovědí.
+- **Stejná otázka se podruhé neplatí.** Odpověď se ukládá do
+  `data/processed/answers/cache/`. Klíč drží otázku, filtry, nastavení, model,
+  verzi promptu a otisk manifestu, takže po novém ingestu nebo změně promptu
+  se odpovídá znovu. `--fresh` v CLI a „nová odpověď" na stránce vynutí nový
+  výpočet, `--no-cache` cache úplně obejde.
+- **Co se ptalo, se zapisuje.** Každá odpověď přidá řádek do
+  `data/processed/answers/asked.jsonl`: otázka, věty s citáty a výsledkem
+  kontroly, zdroje s dokumenty, počty z brány a kontextu a jestli šlo o nový
+  výpočet, nebo o cache. Je to surovina pro další zlatou sadu, protože skutečné
+  otázky jsou lepší než vymyšlené. Prompt a surová odpověď se do logu nepíšou.
+  `--no-log` zápis vypne.
 
 Přes API: `POST /api/answer` s tělem `{"question": "…", "filters": {…},
 "options": {…}}`. Vrací věty s citacemi, zdroje s příznakem `cited`, chybějící

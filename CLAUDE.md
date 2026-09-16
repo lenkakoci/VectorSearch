@@ -272,17 +272,15 @@ at a glance: eleven separate contents blocks. The fix touches document identity
 sub-report) and citations, so it wants its own design first. A citation from a
 bundle currently names a section from the wrong sub-report.
 
-**3. The optional extras around answering.** None of them is needed for the
-demo, and each stands alone:
+**3. The optional extras around answering.** Three are done and live on
+`feature/next-steps`: `injection_scan.py` tells a human when a document speaks
+to the model, `answer_log.py` keeps every asked question as JSONL so real
+questions can become the next golden set, and `answer_cache.py` serves an
+identical question from disk instead of paying for it again. What is left:
 
-- `check_pipeline.py` could flag instruction-like text in an indexed document.
-  Prompt injection is handled at prompt time (sources are JSON with `<` and `>`
-  escaped, and the rules say the text is data), never at ingest.
 - A citation could link to the page in the PDF, not only name it.
 - The ten to thirty seconds of an answer could report progress over SSE instead
   of one spinner.
-- Traces could be logged to JSONL, so real questions become the next golden set.
-- An answer cache would make a demo repeatable without paying for it twice.
 - Grading is the slowest step - median 6 s, two Gemini calls of 20 candidates -
   and shortening it is the change with the most measurable payoff. Smaller
   batches or fewer candidates, each verified on the golden set.

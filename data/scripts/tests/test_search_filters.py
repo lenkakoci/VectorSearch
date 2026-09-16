@@ -91,6 +91,16 @@ def test_describe_lists_alternatives():
     assert filters.describe() == "autor ~ 'Poul' | 'Bičík', od 2019-01-01, část = annex"
 
 
+def test_as_dict_lists_only_what_is_restricted():
+    filters = build_filters(author="Poul", municipality=["Lednice", "Roudno"], date_from="2019")
+    assert filters.as_dict() == {
+        "author": "Poul",
+        "municipality": ["Lednice", "Roudno"],
+        "date_from": "2019-01-01",
+    }
+    assert build_filters().as_dict() == {}
+
+
 def test_empty_filters_produce_no_clause():
     assert Filters().where() == ("", [])
     assert Filters().describe() == ""

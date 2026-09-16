@@ -95,11 +95,15 @@ function stepsOf(answer: AnswerResponse): Step[] {
   }
 
   if (generation) {
+    const cached = trace.cache === 'hit'
     steps.push({
       name: 'Odpověď',
-      detail: `${generation.model} · prompt v${generation.prompt_version} · model hlásí „${generation.model_status}“`,
+      detail: cached
+        ? `z cache: stejná otázka už byla zodpovězena modelem ${generation.model}, prompt v${generation.prompt_version}`
+        : `${generation.model} · prompt v${generation.prompt_version} · model hlásí „${generation.model_status}“`,
       count: `${answer.statements.length} vět`,
-      ms: generation.ms,
+      ms: cached ? null : generation.ms,
+      skipped: cached,
     })
   } else {
     steps.push({ name: 'Odpověď', detail: 'model se nevolal, nebylo z čeho odpovídat', count: '0 vět', skipped: true })

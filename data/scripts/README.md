@@ -56,6 +56,8 @@ for extraction and embeddings. See `.claude/skills/add-reports/SKILL.md`.
 | `citation_check.py` | Verifies quotes and numbers of every sentence against the chunks it cites. No API, no database. |
 | `answer_service.py` | Retrieval, reranking, gate, context, one model call, checks, trace. Model from `GEMINI_ANSWER_MODEL`. |
 | `eval_answers.py` | Answer quality over `../eval/golden.yaml`: cited evidence, verified sentences, refusals. |
+| `answer_log.py` | Appends every answered question to `../processed/answers/asked.jsonl`. No API, no database. |
+| `answer_cache.py` | Serves an identical question from disk instead of paying for it again. No API, no database. |
 
 ## Flags worth knowing
 
@@ -104,7 +106,17 @@ The parts, each testable on its own:
 
 Costs per question: one query embedding, up to two grading calls for
 candidates not graded before, and one answering call. A question whose
-candidates all stay below the gate costs no answering call at all.
+candidates all stay below the gate costs no answering call at all, and an
+identical question asked before costs nothing at all:
+
+| Module | Role |
+| --- | --- |
+| `answer_cache.py` | Keyed by question, filters, options, model, `PROMPT_VERSION` and a fingerprint of the manifest, so a re-ingest or a new prompt invalidates what is stored. `--fresh` on the CLI and `options.fresh` in the API answer again and replace it. Every failure reads as a miss. |
+| `answer_log.py` | One JSON line per answer: the question, the statements with their quotes and checks, the sources with their documents, the gate and context counts, and whether the answer was paid for or cached. The prompt and the raw answer are left out. `--no-log` turns it off. |
+
+Both write under `../processed/answers/`, or under `ANSWER_DIR` when it is set -
+the API container has no processed directory of its own, so docker-compose
+points that variable at a bind mount.
 
 `eval_answers.py` over the golden set on 2026-09-15: answered 28, partial 4,
 insufficient 2 and no_evidence 6; the expected chunk reached the context for

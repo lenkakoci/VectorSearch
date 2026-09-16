@@ -44,6 +44,9 @@ HITS = [
     _hit(3, 1, "Obec Roudno leží v Nízkém Jeseníku."),
 ]
 
+# Nothing here reaches grade 2, so the gate closes and no model is called.
+BELOW_GATE = [_hit(1, 1, "nesouvisí"), _hit(2, 0, "také nesouvisí")]
+
 
 def _search(hits, passed=None):
     debug = {
@@ -98,8 +101,7 @@ def test_an_answer_is_checked_not_believed(monkeypatch, settings):
 
 
 def test_the_gate_stops_a_question_without_evidence_before_the_model(monkeypatch, settings):
-    below = [_hit(1, 1, "nesouvisí"), _hit(2, 0, "také nesouvisí")]
-    monkeypatch.setattr(answer_service, "compare", lambda *args, **kwargs: _search(below, passed=0))
+    monkeypatch.setattr(answer_service, "compare", lambda *args, **kwargs: _search(BELOW_GATE, passed=0))
 
     def fail(model, prompt):
         raise AssertionError("the model must not be called")
@@ -130,3 +132,62 @@ def test_a_model_failure_becomes_answer_unavailable(monkeypatch, settings):
 def test_an_empty_question_is_rejected(settings):
     with pytest.raises(ValueError, match="Nothing to ask"):
         answer(None, "   ", settings=settings)
+
+def test_an_answer_is_paid_for_once_and_then_comes_from_the_cache(monkeypatch, settings, tmp_path):
+    """The second identical question must not reach the model at all."""
+    monkeypatch.setattr(answer_service, "compare", lambda *args, **kwargs: _search(HITS))
+    calls = []
+
+    def once(model, prompt):
+        calls.append(model)
+        return GroundedAnswer(
+            status="answered",
+            statements=[
+                Statement(
+                    text="Navrženo bylo cca 12 ks vrtů o hloubce okolo 80 m.",
+                    source_ids=[1],
+                    quotes=["cca 12 ks hlubokých vrtů o hloubce okolo 80 m"],
+                )
+            ],
+            missing=[],
+            conflicts=[],
+        )
+
+    monkeypatch.setattr(answer_service, "call_model", once)
+    first = answer(None, "Kolik vrtů se navrhuje?", settings=settings, use_neighbours=False, cache_dir=tmp_path)
+
+    def forbidden(model, prompt):
+        raise AssertionError("cache nezabrala, model se zavolal znovu")
+
+    monkeypatch.setattr(answer_service, "call_model", forbidden)
+    second = answer(None, "kolik vrtů   se NAVRHUJE?", settings=settings, use_neighbours=False, cache_dir=tmp_path)
+
+    assert calls == ["gemini-test"]
+    assert second.status == first.status
+    assert [s["text"] for s in second.statements] == [s["text"] for s in first.statements]
+    assert second.sources[0]["chunk_id"] == first.sources[0]["chunk_id"]
+    assert second.trace["cache"] == "hit"
+    assert "cache" not in first.trace
+
+
+def test_a_different_question_is_not_served_from_the_cache(monkeypatch, settings, tmp_path):
+    # Both questions stop at the gate, so neither needs a model to be answered.
+    monkeypatch.setattr(answer_service, "compare", lambda *args, **kwargs: _search(BELOW_GATE, passed=0))
+    answer(None, "Kolik vrtů se navrhuje?", settings=settings, use_neighbours=False, cache_dir=tmp_path)
+    second = answer(None, "Jak hluboko je voda?", settings=settings, use_neighbours=False, cache_dir=tmp_path)
+    assert "cache" not in second.trace
+
+
+def test_a_closed_gate_is_remembered_too(monkeypatch, settings, tmp_path):
+    """The gate costs grading calls, so its verdict is worth keeping as well."""
+    monkeypatch.setattr(answer_service, "compare", lambda *args, **kwargs: _search(BELOW_GATE))
+    first = answer(None, "Jaký je radonový index v Jihlavě?", settings=settings, cache_dir=tmp_path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("brána se přepočítávala, i když byla v cache")
+
+    monkeypatch.setattr(answer_service, "compare", forbidden)
+    second = answer(None, "Jaký je radonový index v Jihlavě?", settings=settings, cache_dir=tmp_path)
+    assert first.status == NO_EVIDENCE
+    assert second.status == NO_EVIDENCE
+    assert second.trace["cache"] == "hit"

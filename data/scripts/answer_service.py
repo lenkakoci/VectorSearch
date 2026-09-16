@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from google.genai import types
@@ -39,6 +40,7 @@ from tenacity import (
     wait_exponential,
 )
 
+import answer_cache
 from answer_prompts import ANSWER_INSTRUCTIONS, PROMPT_VERSION, GroundedAnswer
 from citation_check import check_answer, final_status
 from context_builder import (
@@ -147,6 +149,34 @@ def _retrieval_trace(search: SearchResult) -> dict[str, Any]:
     return {key: search.debug[key] for key in wanted if key in search.debug}
 
 
+def _from_cache(payload: dict[str, Any], *, keep_prompt: bool) -> AnswerResult | None:
+    """Rebuild an answer stored earlier; None when the payload is unusable.
+
+    A cache that cannot be read is a miss, never an error: the chain can always
+    produce the answer again.
+    """
+    try:
+        trace = dict(payload.get("trace") or {})
+        trace["cache"] = "hit"
+        if not keep_prompt:
+            trace.pop("prompt", None)
+            trace.pop("raw_answer", None)
+        return AnswerResult(
+            question=payload["question"],
+            status=payload["status"],
+            statements=payload["statements"],
+            missing=payload["missing"],
+            conflicts=payload["conflicts"],
+            sources=payload["sources"],
+            model=payload["model"],
+            prompt_version=payload["prompt_version"],
+            trace=trace,
+        )
+    except (KeyError, TypeError) as exc:
+        logger.warning("Uložená odpověď má neznámý tvar (%s), počítá se znovu", exc)
+        return None
+
+
 def answer(
     connection,
     question: str,
@@ -162,8 +192,17 @@ def answer(
     max_neighbours: int = MAX_NEIGHBOURS,
     use_neighbours: bool = True,
     keep_prompt: bool = True,
+    cache_dir: Path | None = None,
+    fresh: bool = False,
 ) -> AnswerResult:
     """Answer one question from the corpus.
+
+    With ``cache_dir`` set, an identical question answered before is returned
+    from disk without calling any model, and a fresh answer is stored there.
+    The key covers the filters, the options, the model, the prompt version and
+    a fingerprint of the corpus, so nothing that would change the answer is
+    ignored. ``fresh`` skips reading what is stored and replaces it, which is
+    how a demo asks for the model to be run again.
 
     Raises:
         ValueError: On an empty question.
@@ -175,7 +214,32 @@ def answer(
     if not question:
         raise ValueError("Nothing to ask")
     settings = settings or load_settings()
+    filters = filters or Filters()
     started = time.perf_counter()
+
+    cache_key: str | None = None
+    if cache_dir is not None:
+        cache_key = answer_cache.key_of(
+            question,
+            filters=filters.as_dict(),
+            options={
+                "candidates": candidates,
+                "min_grade": min_grade,
+                "max_sources": max_sources,
+                "token_budget": token_budget,
+                "per_document": per_document,
+                "max_neighbours": max_neighbours,
+                "neighbours": use_neighbours,
+            },
+            model=settings.answer_model,
+            prompt_version=PROMPT_VERSION,
+        )
+        stored = None if fresh else answer_cache.load(cache_key, cache_dir)
+        if stored is not None:
+            cached = _from_cache(stored, keep_prompt=keep_prompt)
+            if cached is not None:
+                logger.info("Odpověď na %r je z cache, model se nevolá", question)
+                return cached
 
     search = compare(
         connection,
@@ -199,7 +263,7 @@ def answer(
     if not passed:
         logger.info("Gate closed for %r: no candidate reached grade %d", question, min_grade)
         trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
-        return AnswerResult(
+        return _remember(cache_key, cache_dir, AnswerResult(
             question=question,
             status=NO_EVIDENCE,
             statements=[],
@@ -209,7 +273,7 @@ def answer(
             model=settings.answer_model,
             prompt_version=PROMPT_VERSION,
             trace=trace,
-        )
+        ))
 
     fetch = None
     if use_neighbours:
@@ -260,14 +324,25 @@ def answer(
         trace["prompt"] = context.prompt
         trace["raw_answer"] = raw.model_dump()
 
-    return AnswerResult(
-        question=question,
-        status=status,
-        statements=statements,
-        missing=[str(item) for item in raw.missing],
-        conflicts=conflicts,
-        sources=sources,
-        model=settings.answer_model,
-        prompt_version=PROMPT_VERSION,
-        trace=trace,
+    return _remember(
+        cache_key,
+        cache_dir,
+        AnswerResult(
+            question=question,
+            status=status,
+            statements=statements,
+            missing=[str(item) for item in raw.missing],
+            conflicts=conflicts,
+            sources=sources,
+            model=settings.answer_model,
+            prompt_version=PROMPT_VERSION,
+            trace=trace,
+        ),
     )
+
+
+def _remember(key: str | None, directory: Path | None, result: AnswerResult) -> AnswerResult:
+    """Store an answer for the next identical question, and return it unchanged."""
+    if key and directory is not None:
+        answer_cache.store(key, asdict(result), directory)
+    return result

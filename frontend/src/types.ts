@@ -270,6 +270,8 @@ export interface AnswerTrace {
   generation?: GenerationTrace
   validation?: ValidationTrace
   total_ms?: number
+  // "hit" when the answer came from the cache and no model was called.
+  cache?: string
   prompt?: string
   raw_answer?: unknown
   [key: string]: unknown
@@ -283,6 +285,7 @@ export interface AnswerOptions {
   token_budget?: number
   neighbours?: boolean
   trace?: boolean
+  fresh?: boolean
 }
 
 export interface AnswerRequest {

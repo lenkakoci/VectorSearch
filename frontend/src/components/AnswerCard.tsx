@@ -123,6 +123,11 @@ export function AnswerCard({ answer, active, onCite }: Props) {
         <span>
           model {answer.model} · prompt v{answer.prompt_version}
         </span>
+        {answer.trace.cache === 'hit' && (
+          <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-600" title="Stejná otázka už byla zodpovězena; model se nevolal.">
+            z cache
+          </span>
+        )}
         {answer.trace.total_ms != null && <span>{(answer.trace.total_ms / 1000).toFixed(1)} s</span>}
       </footer>
     </section>

@@ -41,6 +41,12 @@ services:
       PGHOST: postgres
       PGPORT: "5432"
       CORS_ORIGINS: http://localhost:3001,http://localhost:5173
+      ANSWER_DIR: /app/answers
+    volumes:
+      # What people asked through the page, and the answers already paid for.
+      # The image carries no processed directory, so without this bind mount
+      # both would live inside the container and die with the next rebuild.
+      - ../../data/processed/answers:/app/answers
     ports:
       # Loopback only: the reports are internal and the API has no authentication.
       - "127.0.0.1:8010:8010"

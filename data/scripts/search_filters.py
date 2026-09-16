@@ -179,6 +179,25 @@ class Filters:
         """Return whether nothing is restricted."""
         return not any(getattr(self, field.name) for field in _FIELDS)
 
+    def as_dict(self) -> dict[str, Any]:
+        """Return the restrictions that are set, in JSON-ready values.
+
+        Only what is set: a log or a trace should say what was restricted, not
+        list every field that was not.
+        """
+        out: dict[str, Any] = {}
+        for field in _FIELDS:
+            value = getattr(self, field.name)
+            if not value:
+                continue
+            if isinstance(value, tuple):
+                out[field.name] = [str(item) for item in value]
+            elif isinstance(value, date):
+                out[field.name] = value.isoformat()
+            else:
+                out[field.name] = value
+        return out
+
     def merge(self, other: Filters) -> Filters:
         """Combine with ``other``, keeping this object's values on a clash.
 

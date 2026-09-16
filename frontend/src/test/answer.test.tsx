@@ -51,6 +51,18 @@ describe('the answer itself', () => {
   })
 })
 
+describe('an answer that was not paid for twice', () => {
+  const cached: AnswerResponse = { ...answer, trace: { ...answer.trace, cache: 'hit' } }
+
+  it('says it came from the cache instead of from the model', () => {
+    const card = render(<AnswerCard answer={cached} active={null} onCite={() => undefined} />)
+    expect(card).toContain('z cache')
+
+    const trace = render(<PipelineTrace answer={cached} open onToggle={() => undefined} />)
+    expect(trace).toContain('z cache: stejná otázka už byla zodpovězena')
+  })
+})
+
 describe('the sources under the answer', () => {
   it('names each source and says which ones the answer cited', () => {
     const html = render(<SourceList sources={answer.sources} highlight={null} />)

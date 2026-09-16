@@ -44,9 +44,10 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import answer_log
 from answer_service import AnswerResult, AnswerUnavailable, answer
 from context_builder import MAX_SOURCES, PER_DOCUMENT, TOKEN_BUDGET
-from pipeline_common import configure_logging, load_connection_params, load_settings
+from pipeline_common import ANSWERS_DIR, configure_logging, load_connection_params, load_settings
 from rerank_service import MAX_GRADE, MIN_GRADE, RerankUnavailable
 from search_filters import Filters, build_filters, parse_query
 from search_service import (
@@ -136,6 +137,7 @@ class AnswerOptions(BaseModel):
     token_budget: int = Field(TOKEN_BUDGET, ge=500, le=60000)
     neighbours: bool = True
     trace: bool = Field(True, description="Return the prompt and the raw answer in the trace")
+    fresh: bool = Field(False, description="Answer again instead of returning the stored answer")
 
 
 class AnswerRequest(BaseModel):
@@ -477,6 +479,8 @@ def answer_question(request: AnswerRequest) -> AnswerResponse:
                 token_budget=options.token_budget,
                 use_neighbours=options.neighbours,
                 keep_prompt=options.trace,
+                cache_dir=ANSWERS_DIR,
+                fresh=options.fresh,
             )
     except EmbeddingUnavailable as exc:
         raise _embedding_error(exc) from exc
@@ -484,6 +488,14 @@ def answer_question(request: AnswerRequest) -> AnswerResponse:
         raise _rerank_error(exc) from exc
     except AnswerUnavailable as exc:
         raise _answer_error(exc) from exc
+    answer_log.append(
+        answer_log.record(
+            result,
+            source="api",
+            filters=filters.as_dict(),
+            options=options.model_dump(exclude_defaults=True),
+        )
+    )
     return _answer_response(result)
 
 

@@ -34,6 +34,7 @@ export default function App() {
   const [maxSources, setMaxSources] = useState(8)
   const [minGrade, setMinGrade] = useState(2)
   const [neighbours, setNeighbours] = useState(true)
+  const [fresh, setFresh] = useState(false)
   const [filters, setFilters] = useState<FilterState>(emptyFilters)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [debugOpen, setDebugOpen] = useState(false)
@@ -64,6 +65,7 @@ export default function App() {
       max_sources: maxSources,
       min_grade: minGrade,
       neighbours,
+      fresh,
     })
   }
 
@@ -221,6 +223,13 @@ export default function App() {
                   className="h-4 w-4"
                 />
                 sousedé
+              </label>
+              <label
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700"
+                title="Stejná otázka se jinak vrátí z cache. Zaškrtnutím se odpověď spočítá znovu a zaplatí."
+              >
+                <input type="checkbox" checked={fresh} onChange={(event) => setFresh(event.target.checked)} className="h-4 w-4" />
+                nová odpověď
               </label>
             </>
           )}
