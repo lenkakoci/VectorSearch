@@ -1,6 +1,6 @@
 import clsx from 'clsx'
-import { useState } from 'react'
-import { COST_INFO, detailOf, TOPICS } from '../lib/architecture'
+import { useEffect, useState } from 'react'
+import { DETAILS, COST_INFO, detailOf, TOPICS } from '../lib/architecture'
 import { PipelineMap } from './PipelineMap'
 import { StepDetail } from './StepDetail'
 
@@ -12,7 +12,30 @@ const OVERVIEW = ['PDF', 'struktura', 'PostgreSQL', 'kandidáti', 'reranking', '
 // work with the backend switched off, mid-demo.
 export function ArchitectureView() {
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [expandAll, setExpandAll] = useState(false)
   const detail = activeId ? (detailOf(activeId) ?? null) : null
+
+  // Arrow keys step through the pipeline in order, Esc closes the panel —
+  // useful when someone is presenting and does not want to keep reaching
+  // for the mouse between boxes.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveId(null)
+        return
+      }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      const target = event.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      event.preventDefault()
+      const index = activeId ? DETAILS.findIndex((item) => item.id === activeId) : -1
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      const nextIndex = index === -1 ? 0 : (index + step + DETAILS.length) % DETAILS.length
+      setActiveId(DETAILS[nextIndex].id)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [activeId])
 
   return (
     <div className="space-y-4">
@@ -25,9 +48,19 @@ export function ArchitectureView() {
             </span>
           ))}
         </p>
-        <p className="mt-1 text-xs text-slate-500">
-          Zpracování posudku běží jednou, offline. Hledání a odpověď běží při každém dotazu. Klikněte na kterýkoli krok níže.
-        </p>
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-slate-500">
+            Zpracování posudku běží jednou, offline. Hledání a odpověď běží při každém dotazu. Klikněte na kterýkoli krok níže, nebo
+            listujte šipkami.
+          </p>
+          <button
+            type="button"
+            onClick={() => setExpandAll((value) => !value)}
+            className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:border-blue-400"
+          >
+            {expandAll ? 'Skrýt podrobnosti' : 'Rozbalit vše (pro tisk)'}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]">
@@ -66,6 +99,15 @@ export function ArchitectureView() {
       <p className="text-xs text-slate-400">
         Barvy shrnují cenu kroku: {COST_INFO.local.label}, {COST_INFO.sql.label}, {COST_INFO.paid.label}.
       </p>
+
+      {expandAll && (
+        <section className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-900">Všechny kroky a témata — plný text</h3>
+          {DETAILS.map((item) => (
+            <StepDetail key={item.id} detail={item} onClose={() => setExpandAll(false)} />
+          ))}
+        </section>
+      )}
     </div>
   )
 }

@@ -510,9 +510,20 @@ API (`/api/health`, `/api/facets`, `POST /api/search`, `POST /api/compare`,
 `http://localhost:8010/docs`. Nemá autentizaci a v Compose je jen na
 `127.0.0.1` – posudky jsou interní.
 
+Třetí záložka, **Architektura**, je pro prezentaci pipeline kolegům: celé
+schéma — čtyři fáze, 24 kroků, obě retrievalové větve jako vidlice sloučená do
+RRF — na jedné obrazovce, barva boxíku podle ceny kroku (zdarma lokálně / SQL /
+placené volání). Klik na krok otevře podrobnosti v bočním panelu: technologii,
+co se děje, záludnosti, bezpečnostní opatření, naměřená čísla a soubory v repu.
+Pod schématem jsou karty napříč pipeline — měření kvality, bezpečnostní
+opatření na jednom místě, provoz, doladění extrakčního schématu z
+`extra_fields`, otevřené věci. Nevolá API: čísla jsou zapsaná v
+`frontend/src/lib/architecture.ts` s datem měření, takže záložka funguje
+i bez běžící databáze — přesně to, co prezentace potřebuje.
+
 Testy: `uv run pytest` v `data/scripts` (filtry, fúze, kontext, citace, API bez
 databáze), `npm test` ve `frontend` (render nad hledáním i nad odpovědí
-zachycenou z API, včetně otázky bez podkladů).
+zachycenou z API, včetně otázky bez podkladů, a nad daty záložky Architektura).
 
 ## Měření kvality vyhledávání
 

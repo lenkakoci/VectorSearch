@@ -11,8 +11,9 @@ npm run build        # dist/
 API musí běžet: `cd ..\data\scripts; uv run uvicorn search_api:app --reload --port 8010`.
 Jinou adresu API nastavíte proměnnou `VITE_API_URL` (dev proxy) nebo `VITE_API_BASE` (build).
 
-Stránka má dvě záložky nad společnými filtry: **Vyhledávání** (pasáže)
-a **Zeptat se dokumentů** (odpověď s citacemi).
+Stránka má tři záložky: **Vyhledávání** (pasáže) a **Zeptat se dokumentů**
+(odpověď s citacemi) sdílejí filtry; **Architektura** je samostatná statická
+stránka bez filtrů a bez volání API.
 
 ## Vyhledávání
 
@@ -50,6 +51,24 @@ a **Zeptat se dokumentů** (odpověď s citacemi).
 - Odznak „z cache" u odpovědi, kterou server vzal z uložených; expert panel
   u ní říká, že se model nevolal.
 
+## Architektura
+
+Celá pipeline na jedné obrazovce, pro prezentaci a vysvětlení kolegům.
+
+- **Schéma** rozdělené do čtyř fází (zpracování posudku, uložení a index, od
+  dotazu k pasážím, od pasáží k odpovědi), 24 boxíků, barva boxíku nese cenu
+  kroku (zdarma lokálně / SQL / placené volání Gemini). Dvě retrievalové větve
+  (slova, význam) jsou nakreslené jako vidlice, sloučená do RRF.
+- Klik na boxík otevře v bočním panelu technologii, co se v kroku děje,
+  záludnosti, bezpečnostní opatření (🛡), naměřená čísla a soubory v repu.
+- **Témata napříč** pod schématem: měření kvality (tabulky recall@k a MRR),
+  bezpečnostní opatření na jednom místě, provoz a nasazení, doladění
+  extrakčního schématu z `extra_fields`, otevřené věci a další práce.
+- Šipky nahoru/dolů listují kroky v pořadí pipeline, Esc zavře panel;
+  „Rozbalit vše" vypíše celý obsah pod sebe pro tisk.
+- Nevolá API — data jsou zapsaná v `src/lib/architecture.ts` s datem měření,
+  takže záložka funguje i bez běžící databáze.
+
 ## Struktura
 
 | cesta | obsah |
@@ -57,9 +76,11 @@ a **Zeptat se dokumentů** (odpověď s citacemi).
 | `src/App.tsx` | stav stránky, kompozice |
 | `src/components/` | SearchBar, ModeSwitch, FilterPanel, MultiSelect, ActiveFilters, ResultList, ResultCard, ScoreBreakdown, ContextView, DocumentInfo, CompareView, DebugPanel |
 | `src/components/` (odpovědi) | AskView, AnswerCard, AnswerProgress, SourceList, PipelineTrace |
+| `src/components/` (architektura) | ArchitectureView, PipelineMap, StepDetail |
 | `src/hooks/` | useSearch, useAnswer |
 | `src/lib/modes.ts` | popisy režimů laicky, ukázkové dotazy |
 | `src/lib/answers.ts` | stavy odpovědi, popisy kontrol a rolí, ukázkové otázky |
+| `src/lib/architecture.ts` | data záložky Architektura: kroky, fáze, témata napříč |
 | `src/lib/filters.ts` | stav filtrů a jeho převod na tělo požadavku |
 | `src/lib/highlight.tsx` | vykreslení `<mark>` z `ts_headline` bez `innerHTML`, a dohledání citátu ve zdroji |
 | `src/test/` | render testy nad odpověďmi zachycenými z API |

@@ -53,7 +53,10 @@ or no answer at all when nothing reached the gate (ask_reports.py, /api/answer)
 by side for demonstrations and, in the second tab, answer a question with its
 sources. Neither contains search logic; both sit on `search_service.py`, so a
 change there is the only way to change what the CLI, the API and the page
-return. `deploy/local/docker-compose.yml` runs both next to
+return. A third tab, Architektura, is a static explanation of the whole
+pipeline with its own data in `frontend/src/lib/architecture.ts` — it calls no
+API and needs no database, which is the point when it is used to present the
+system to someone else. `deploy/local/docker-compose.yml` runs both next to
 PostgreSQL, bound to loopback: the API has no authentication and the reports are
 internal.
 
