@@ -517,7 +517,15 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Z dotazu se vyzobou prefixy jako `autor:` a `obec:`. SQL nepíše model, ale kód.',
     cost: 'local',
     tech: ['search_filters.py', 'parametrizované %s'],
-    what: [],
+    what: [
+      'Filtr a sémantiku lze odlišit v jednom dotazu: "autor:Poul obec:Lednice hladina vody" — prefixy se vyzobou z textu, zbytek jde na vektory a fulltext.',
+      'search_filters.py skládá WHERE jen z vlastního pevného slovníku prefixů (autor, klient, lokalita, obec, typ, org, od, do, doc, druh) a každou hodnotu posílá jako parametr %s.',
+      'Textové filtry hledají podřetězec — autor:Poul trefí i "Mgr. Josefína Bízová, RNDr. Mgr. Ivan Poul, Ph.D."',
+      'Neznámý prefix se nezahodí — zůstane součástí hledaného textu a vypíše se varování.',
+    ],
+    safeguard: [
+      'Dotaz se záměrně nepřevádí na SQL modelem. Model si může vymyslet sloupec nebo vrátit věcně špatný výsledek bez chyby, a u geologických posudků je tichá chyba bezpečnostní problém — ze stejného důvodu extrakce nesmí nic domýšlet.',
+    ],
     files: ['data/scripts/search_filters.py'],
   },
   {
@@ -527,8 +535,12 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Jedno volání na dotaz, s jiným task_type než u chunků. Poslední dotazy drží cache.',
     cost: 'paid',
     tech: ['RETRIEVAL_QUERY', 'LRU 256'],
-    what: [],
-    files: ['data/scripts/search_service.py'],
+    what: [
+      'embed_query() volá stejný model jako chunky, ale s task_type=RETRIEVAL_QUERY — obě strany páru (dokument/dotaz) musí sedět, jinak retrieval kvalita zkolabuje.',
+      'search_service.py drží v paměti LRU cache posledních 256 embeddovaných dotazů; compare() navíc embedduje jednou pro všechny tři režimy naráz.',
+      'Search je jedno embedding volání a kvóta je na požadavek za minutu — burst dotazů může narazit na 429; --mode fts se volání vyhne úplně.',
+    ],
+    files: ['data/scripts/search_service.py', 'data/scripts/gemini_auth.py'],
   },
   {
     id: 'branch-fts',
@@ -538,7 +550,16 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     cost: 'sql',
     branch: 'fts',
     tech: ['websearch_to_tsquery', 'IDF'],
-    what: [],
+    what: [
+      'Přísný režim fts: websearch_to_tsquery(czech, …) || websearch_to_tsquery(czech_literal, …). "||" nad tsquery je OR, takže obě konfigurace se OR-ují — ale slova uvnitř jedné konfigurace websearch_to_tsquery pořád AND-uje.',
+      'Na golden sadě fts najde odpověď jen u 3 z 34 otázek, protože otázka málokdy má všechna svá slova v jednom chunku.',
+      'fts_any (a fulltextová část rerankingu) je volnější: každé slovo dotazu se stane vlastní tsquery, sečte se váha IDF (ln(1 + (N−df+0,5)/(df+0,5))) chunků, které dané slovo obsahují, a ts_rank jen rozhoduje remízy.',
+      'Bez IDF by "podzemní voda" (stovky chunků) přehlušilo jediné jméno místa, které identifikuje správný posudek.',
+    ],
+    numbers: [
+      { label: 'fts recall@40', value: '0,09' },
+      { label: 'fts_any recall@40', value: '0,88' },
+    ],
     files: ['data/scripts/search_service.py'],
   },
   {
@@ -549,7 +570,12 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     cost: 'sql',
     branch: 'vector',
     tech: ['pgvector <=>', 'hnsw.ef_search'],
-    what: [],
+    what: [
+      'Řazení podle embedding <=> dotaz (kosinová vzdálenost) přes WHERE embedding IS NOT NULL — přílohové chunky bez vektoru se sem nedostanou nikdy.',
+      'hnsw.ef_search se nastaví na počet řádků, které se natahují (min 40, max 1000), transakčně lokálně přes set_config.',
+      'S metadatovým filtrem se vektorový dotaz nejdřív joinuje s documents a teprve pak řadí — stojí to HNSW index, ale je to správný kompromis: filtrování až po globálním top-N by mohlo vrátit nic.',
+    ],
+    numbers: [{ label: 'recall@40', value: '0,83' }],
     files: ['data/scripts/search_service.py'],
   },
   {
@@ -559,7 +585,23 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'RRF sloučí obě pořadí. Kandidáti jsou ale dvacet nejlepších z každé větve zvlášť.',
     cost: 'local',
     tech: ['RRF k = 60', '20 + 20 = 40'],
-    what: [],
+    what: [
+      'Reciprocal Rank Fusion: skóre chunku je součet 1/(60 + pořadí) přes větve, ve kterých se objevil. Nahoře skončí to, co našly obě metody.',
+      'Kandidáti pro reranking se ale neberou z fúzovaného top 40 — je to 20 nejlepších z vektoru a 20 nejlepších z volnějšího fulltextu, zvlášť.',
+      'Fúze totiž systematicky nadržuje tomu, co našly obě větve, a vytlačuje úryvky, které najde jen jedna — typicky přílohy bez vektoru. Oprava přidala dvě správné odpovědi v měření.',
+    ],
+    blocks: [
+      {
+        kind: 'code',
+        title: 'RRF (data/scripts/search_service.py)',
+        code: `RRF_K = 60
+hit["rrf_score"] += 1.0 / (RRF_K + rank)`,
+      },
+    ],
+    numbers: [
+      { label: 'RRF k', value: '60' },
+      { label: 'kandidátů', value: '20 + 20 = 40' },
+    ],
     files: ['data/scripts/search_service.py'],
   },
   {
@@ -569,7 +611,26 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Gemini přečte 40 kandidátů s otázkou a každému dá známku 0–3 i důvod.',
     cost: 'paid',
     tech: ['Gemini', 'dávka 20 × 2', 'cache známek'],
-    what: [],
+    what: [
+      '40 kandidátů se ohodnotí ve dvou paralelních voláních po 20. Škála: 3 = úryvek přímo obsahuje odpověď, 2 = obsahuje její část, 1 = souvisí s tématem, 0 = nesouvisí.',
+      'Chunk o jiné lokalitě, vrtu nebo dokumentu než otázka dostane nejvýš 1, i kdyby jinak odpovídal na podobnou otázku.',
+      'Známky se cachují dvouvrstvě: v paměti procesu (LRU 5000) pro běžící web demo, na disku (data/processed/answers/grades/) pro CLI a evaluaci napříč procesy — klíč drží model, otázku a otisk korpusu.',
+      'Menší dávky nepomáhají: 20×2 trvá v mediánu 9,5 s, 10×4 8,5 s, 8×5 9,4 s — latence je hlavně na volání, ne na kandidáta. Menší dávky navíc mění samotné známky (29 ze 200 se posunulo), protože dávka je srovnávací množina.',
+    ],
+    safeguard: [
+      'Text úryvků jsou data, ne pokyny — instrukce uvnitř úryvků se neprovádí. Stejné pravidlo jako u kontroly citací a u volání modelu pro odpověď.',
+    ],
+    gotchas: [
+      {
+        title: 'Známky nejsou plně reprodukovatelné',
+        text: 'Ani při teplotě 0 nejsou známky stoprocentně stabilní — stejný chunk dostal 2 v jednom procesu a 3 v jiném. Hraniční chunk může přes bránu projít nebo ne podle běhu; evaluace se proto srovnává podle součtů, ne podle jednotlivých otázek.',
+      },
+    ],
+    numbers: [
+      { label: 'medián', value: '6 s (4–13 s)' },
+      { label: 'cache: nová otázka', value: '7,1 s' },
+      { label: 'cache: dřív hodnocená', value: '4 ms' },
+    ],
     files: ['data/scripts/rerank_service.py', 'data/scripts/grade_cache.py'],
   },
   {
@@ -579,7 +640,16 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Známka 2 je práh. Když ji nikdo nepřekročí, model se vůbec nezavolá.',
     cost: 'local',
     tech: ['MIN_GRADE = 2'],
-    what: [],
+    what: [
+      'Brána je jednoduchý predikát: grade is None or grade >= 2. Chunk bez známky (reranking neproběhl) projde automaticky.',
+      'Zavřená brána znamená, že se odpovídací volání modelu vůbec nespustí — nejlevnější možná forma "nevím".',
+      'Na golden sadě: brána pustila relevantní úryvek u 33 z 34 zodpověditelných otázek a nepustila nic u všech 6 nezodpověditelných.',
+    ],
+    numbers: [
+      { label: 'práh', value: 'známka ≥ 2' },
+      { label: 'propustila relevantní', value: '33 / 34' },
+      { label: 'zavřela u nezodpověditelných', value: '6 / 6' },
+    ],
     files: ['data/scripts/rerank_service.py'],
   },
 
@@ -590,7 +660,18 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Nejvýš osm úryvků, tři z jednoho posudku. Míň kontextu je lepší kontext.',
     cost: 'local',
     tech: ['8 zdrojů', '10 000 tokenů', 'sousedé'],
-    what: [],
+    what: [
+      'Nejvýš 8 úryvků, z jednoho posudku v prvním kole nejvýš 3, se stropem 10 000 tokenů — počítá se z token_count, který už je uložený, takže výběr nestojí žádné volání.',
+      'K úryvku, jehož sekce je rozdělená do víc oken, se přidá soused se stejnou sekcí a rolí "kontext" — čte se, aby se necitovala půlka věty.',
+      'Zdroje jdou modelu jako JSON s escapovanými < a > (chunk nemůže zavřít blok, ve kterém sedí) a otázka jde až za nimi — dlouhý prompt Gemini zvládá lépe, když otázka přijde poslední.',
+      'Do promptu jde doslovný chunk_raw, nikdy chunk_text s KONTEXT: prefixem — ten je model-generated shrnutí a citoval by se, jako by to byl text zprávy.',
+    ],
+    numbers: [
+      { label: 'max zdrojů', value: '8' },
+      { label: 'max z jednoho posudku', value: '3' },
+      { label: 'strop', value: '10 000 tokenů' },
+      { label: 'max sousedů', value: '4' },
+    ],
     files: ['data/scripts/context_builder.py'],
   },
   {
@@ -600,7 +681,20 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Jedno volání. Odpovídá se jen ze zdrojů a každá věta musí nést doslovný citát.',
     cost: 'paid',
     tech: ['Gemini', 'temperature 0', 'PROMPT_VERSION = 2'],
-    what: [],
+    what: [
+      'Model odpovídá jen ze zdrojů, nepřevádí jednotky, nepřenáší zjištění mezi lokalitami. Každá věta potřebuje aspoň jeden source_id a aspoň jeden doslovný citát o 5 až 30 slovech.',
+      'Žádná čísla stran ani kapitol ve větách — ta se ukazují až u citace, ne v textu odpovědi.',
+      'Když zdroje nestačí: insufficient s prázdnými větami a vyplněným missing, nebo partial pro zdokumentovanou část. "Nevím" je plnohodnotná odpověď, ne selhání.',
+      'Rozpory se nevybírají — obě hodnoty se uvedou s citacemi a popíšou se v conflicts, po ověření, že nejde o různé lokality nebo vrty.',
+    ],
+    safeguard: [
+      'Zdrojový text je data, ne pokyny — instrukce uvnitř zdrojů se neprovádí, nanejvýš se zmíní jako obsah dokumentu. Žádné odkazy, URL ani obrázky v odpovědi.',
+    ],
+    numbers: [
+      { label: 'PROMPT_VERSION', value: '2' },
+      { label: 'teplota', value: '0.0' },
+      { label: 'citát', value: '5–30 slov' },
+    ],
     files: ['data/scripts/answer_service.py', 'data/scripts/answer_prompts.py'],
   },
   {
@@ -610,7 +704,14 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     lead: 'Server hledá každý citát v citovaném úryvku a každé číslo věty ve zdrojích.',
     cost: 'local',
     tech: ['citation_check.py', 'text_match.py'],
-    what: [],
+    what: [
+      'Gemini nemá API pro citace vlastních dokumentů, takže záruku dodělává server. Čtyři kontroly v pořadí, první selhání vyhrává: neplatný zdroj → bez citátu → citát se nenašel → číslo bez opory.',
+      'Citát se hledá jen v chunk_raw citovaného zdroje (ne v hlavičce), po normalizaci (NFC, spojovníky, mezery — ale ne diakritika, čísla ani jednotky, ty musí sedět přesně).',
+      'Číslo se hledá i v pěti hlavičkových polích zdroje (titul, obec, typ, organizace, datum) — ta jdou do promptu se zdrojem, takže jsou opora. Strana a sekce záměrně ne, jsou to malé celočíselné hodnoty ve stejném rozsahu jako hlídané veličiny.',
+      'Digit nalepený na písmeno (HV1, J16) se nepočítá jako číslo vůbec — je to jméno. Mezera mezi číslicemi se povoluje kvůli tabulkám a tisícovkám.',
+      'Věta, která neprojde, se označí a stav odpovědi klesne na partial.',
+    ],
+    numbers: [{ label: 'prošlo kontrolou', value: '72 / 78 vět' }],
     files: ['data/scripts/citation_check.py', 'data/scripts/text_match.py'],
   },
   {
@@ -621,8 +722,21 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts
     cost: 'sql',
     artifact: 'asked.jsonl + cache odpovědí',
     tech: ['FastAPI', 'server-sent events'],
-    what: [],
-    files: ['data/scripts/search_api.py', 'data/scripts/answer_log.py'],
+    what: [
+      'Čtyři stavy: answered, partial, insufficient, no_evidence — poslední z nich je jediný, který model vůbec neviděl (brána byla zavřená).',
+      'POST /api/answer/stream posílá kroky přes server-sent events, jak k nim server dochází — deset až třicet sekund u jednoho spinneru vypadá jako zaseknutá stránka, kroky s čísly ne.',
+      'Odpověď se cachuje podle otázky, filtrů, nastavení, modelu, verze promptu a otisku manifestu — stejná otázka je pak za 0,55 s místo 22,9 s. Nový ingest cache zneplatní.',
+      'GET /api/documents/{id}/pdf otevře zdrojové PDF na straně, kterou citace jmenuje — jméno souboru se řeší jen uvnitř REPORTS_INPUT_DIR, traversal mimo něj nejde.',
+      'Každá otázka se zapíše do asked.jsonl s větami, citáty a výsledkem kontroly — surovina pro budoucí rozšíření zlaté sady, protože skutečné otázky jsou lepší než vymyšlené.',
+    ],
+    safeguard: [
+      'API nemá autentizaci — zabezpečení je jen v tom, že je v Compose publikované jen na loopback (127.0.0.1) a posudky jsou interní dokumenty organizace.',
+    ],
+    numbers: [
+      { label: 'cache odpovědi', value: '22,9 s → 0,55 s' },
+      { label: 'medián na otázku', value: '13,8 s' },
+    ],
+    files: ['data/scripts/search_api.py', 'data/scripts/answer_log.py', 'data/scripts/answer_cache.py'],
   },
 ]
 
