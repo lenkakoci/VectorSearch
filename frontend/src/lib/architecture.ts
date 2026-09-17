@@ -748,7 +748,62 @@ export const TOPICS: Topic[] = [
     title: 'Měření kvality',
     lead: 'Čtyřicet českých otázek, z toho šest bez odpovědi v korpusu.',
     tech: ['golden.yaml', 'recall@k', 'MRR'],
-    what: [],
+    what: [
+      'data/eval/golden.yaml: 40 otázek — 12 exact (kódy, označení), 11 paraphrase, 6 negative (bez odpovědi v korpusu), 5 morphology, 4 annex, 2 multi (odpověď ve více dokumentech).',
+      'Relevance se určuje podle textu (text_match.py ignoruje velikost písmen, zdvojené mezery, druh pomlčky), ne podle chunk_id — sada přežije přechunkování.',
+      'eval_retrieval.py měří recall@5/10/40 a MRR pro každý režim; eval_answers.py měří, jestli odpověď citovala očekávaný úryvek, kolik vět prošlo kontrolou a jestli systém mlčel tam, kde korpus odpověď nemá.',
+      '--check ověří sadu proti databázi zdarma — výňatek, který nic nenajde, by se jinak tiše počítal jako nenalezený.',
+    ],
+    blocks: [
+      {
+        kind: 'table',
+        title: 'Retrieval (13. 9. 2026, 34 zodpověditelných otázek)',
+        table: {
+          head: ['režim', 'recall@5', 'recall@40', 'MRR', 'odpověď mimo top 40'],
+          rows: [
+            ['fts', '0,04', '0,09', '0,06', '31 z 34'],
+            ['vector', '0,62', '0,83', '0,53', '5 z 34'],
+            ['hybrid', '0,66', '0,87', '0,54', '4 z 34'],
+            ['fts_any', '0,69', '0,88', '0,53', '4 z 34'],
+            ['rerank', '0,92', '0,96', '0,79', '1 z 34'],
+          ],
+        },
+      },
+      {
+        kind: 'table',
+        title: 'Odpovědi (15. 9. 2026, 40 otázek)',
+        table: {
+          head: ['co se měřilo', 'výsledek'],
+          rows: [
+            ['odpovězeno / částečně / nedostatek podkladů / bez podkladů', '28 / 4 / 2 / 6'],
+            ['očekávaný úryvek byl v kontextu', '34 z 34'],
+            ['odpověď ho i citovala', '31 z 34'],
+            ['věty, které prošly kontrolou citací', '72 z 78'],
+            ['otázky bez odpovědi: systém mlčel', '6 z 6'],
+            ['vymyšlená odpověď', '0'],
+            ['medián času na otázku', '13,8 s'],
+          ],
+        },
+      },
+      {
+        kind: 'table',
+        title: 'Kolik kandidátů se hodnotí (16. 9. 2026)',
+        table: {
+          head: ['kandidátů', 'recall@5', 'recall@40', 'MRR', 'brána pustila'],
+          rows: [
+            ['40', '0,924', '0,956', '0,806', '33 z 34'],
+            ['24', '0,894', '0,926', '0,792', '32 z 34'],
+          ],
+        },
+      },
+      {
+        kind: 'note',
+        title: 'Pozor při srovnávání běhů',
+        text: [
+          'Známky rerankeru nejsou plně reprodukovatelné ani při teplotě 0, takže jednotlivé běhy kolísají o pár setin — srovnávají se podle součtů přes celou sadu, ne podle jedné otázky.',
+        ],
+      },
+    ],
     files: ['data/eval/golden.yaml', 'data/scripts/eval_retrieval.py', 'data/scripts/eval_answers.py'],
   },
   {
@@ -757,8 +812,18 @@ export const TOPICS: Topic[] = [
     title: 'Bezpečnostní opatření',
     lead: 'Kde všude se hlídá, aby systém nelhal a aby se dokumenty nedostaly ven.',
     tech: ['grounding', 'kontrola citací', 'injection_scan'],
-    what: [],
-    files: ['data/scripts/search_filters.py', 'data/scripts/citation_check.py', 'data/scripts/injection_scan.py'],
+    what: [
+      'Extrakce je striktně groundovaná — žádné odvozování, žádné dopočítávání z obecných znalostí. U geologického posudku je vymyšlená hladina podzemní vody bezpečnostní chyba, ne kosmetická.',
+      'Dotaz se nepřevádí na SQL modelem — search_filters.py skládá WHERE jen z vlastního pevného slovníku a hodnoty posílá parametrizovaně. Model může vymyslet sloupec nebo vrátit tiše špatný výsledek.',
+      'Zdrojový text (chunky, extrakce) je do promptu vždy data, ne pokyny — grader i model pro odpověď mají explicitní instrukci instrukce uvnitř zdrojů neprovádět.',
+      'injection_scan.py (v check_pipeline.py) hlásí, když nějaký chunk mluví k modelu, ne ke čtenáři — přepsání pokynů, novou roli, diktovanou odpověď, napodobený systémový prompt. Není to obrana (ta je v tom, že zdroje jsou data), ale jediné místo, kde se to člověk dozví.',
+      'citation_check.py je poslední pojistka nad odpovědí: každý citát musí být doslova v citovaném úryvku, každé číslo věty musí mít oporu ve zdrojích.',
+      'PDF endpoint řeší jen jméno souboru uvnitř REPORTS_INPUT_DIR — resolved candidate musí mít stejného rodiče jako vstupní adresář, jinak vrátí 404. Traversal mimo adresář nejde.',
+      'API nemá autentizaci ani autorizaci — jediná ochrana je publikování portu jen na loopback (127.0.0.1:8010) v Compose a to, že posudky jsou interní.',
+      'Posudky se do gitu neukládají (data/PDFs je gitignorované), přihlašovací údaje žijí jen v .env, verzuje se jen .env.template.',
+    ],
+    numbers: [{ label: 'čistých dokumentů proti injection_scan', value: '16 / 16' }],
+    files: ['data/scripts/search_filters.py', 'data/scripts/citation_check.py', 'data/scripts/injection_scan.py', 'data/scripts/search_api.py'],
   },
   {
     id: 'runtime',
@@ -766,8 +831,23 @@ export const TOPICS: Topic[] = [
     title: 'Provoz a nasazení',
     lead: 'Tři kontejnery, dvě cache a několik pastí, do kterých se tu už šláplo.',
     tech: ['Docker Compose', 'nginx', 'PostgreSQL 17'],
-    what: [],
-    files: ['deploy/local/docker-compose.yml', 'frontend/nginx.conf', 'postgres/Dockerfile'],
+    what: [
+      'Tři služby: postgres (vlastní obraz s pgvector a hunspell-cs), api (FastAPI, Dockerfile.api), frontend (React, servírováno nginxem). name: vectorsearch v compose souboru brání recyklaci cizích kontejnerů.',
+      'postgres publikuje 5432 na všech rozhraních; api a frontend jen na 127.0.0.1 — posudky jsou interní a API nemá autentizaci.',
+      'Manifest se do API kontejneru mountuje read-only, protože oba cache (odpovědí i známek) klíčují na jeho otisk. Bez mountu by kontejner otiskl prázdný korpus a nesdílel nic s příkazovou řádkou.',
+      'nginx.conf čeká na /api/ 300 s — odpověď trvá typicky 10–30 s, ale pomalé volání Gemini bylo vidět přes dvě minuty. Kratší timeout než řetěz za ním vypadá přesně jako spadlý endpoint.',
+    ],
+    gotchas: [
+      {
+        title: '--no-deps je nutné',
+        text: 'docker compose up --build api frontend bez --no-deps přestaví i obraz PostgreSQL jako závislost — a pokud se obraz změní, vytvoří databázový kontejner znovu. Data na disku přežijí, otevřená spojení ne. Jeden evaluační běh takhle zemřel uprostřed.',
+      },
+      {
+        title: 'Bind mount drží data',
+        text: 'deploy/local/data/postgres nikdy nemazat a nepouštět docker compose down -v ani --remove-orphans bez rozmyslu — databáze obsahuje reálné dokumenty.',
+      },
+    ],
+    files: ['deploy/local/docker-compose.yml', 'frontend/nginx.conf', 'postgres/Dockerfile', 'data/scripts/Dockerfile.api'],
   },
   {
     id: 'schema',
@@ -775,7 +855,38 @@ export const TOPICS: Topic[] = [
     title: 'Doladění schématu z extra_fields',
     lead: 'Extrakční schéma je provizorní schválně. Teď je poprvé dost dat ho dodělat.',
     tech: ['extra_fields', 'missing_fields', 'SCHEMA_VERSION'],
-    what: [],
+    what: [
+      'Schéma bylo napsané dřív, než existoval jediný reálný posudek. report_type je proto volný text, ne Literal, a extra_fields sbírá vše, co schéma nepokrývá.',
+      'Teď je poprvé dost dat: cislo_zakazky, cislo_geofond, hydrogeologicky_rajon, souradnice_vrtu_sjtsk, hloubka_vrtu, vystroj_vrtu se opakují napříč dokumenty.',
+      'Aggregace se dělá v SQL nad extraction_json — časté klíče v extra_fields jsou pole, která schématu chybí; časté položky v missing_fields jsou pole, která do schématu možná vůbec nepatří.',
+    ],
+    blocks: [
+      {
+        kind: 'code',
+        title: 'Agregace extra_fields a missing_fields',
+        code: `SELECT jsonb_array_elements(extraction_json->'extra_fields')->>'key' AS field,
+       count(*)
+FROM documents GROUP BY 1 ORDER BY 2 DESC;
+
+SELECT jsonb_array_elements_text(extraction_json->'missing_fields') AS field,
+       count(*)
+FROM documents GROUP BY 1 ORDER BY 2 DESC;`,
+      },
+      {
+        kind: 'text',
+        title: 'Postup (.claude/skills/data-ingestion/SKILL.md)',
+        text: [
+          '1. Nové posudky do data/PDFs. 2. extract_reports.py --markdown-only bez placení, přečíst Markdown ručně. 3. ingest.py na hrstce posudků. 4. Agregovat extra_fields a missing_fields (SQL výše). 5. Upravit schemas.py: přidat povýšená pole, zúžit report_type na Literal, zvednout SCHEMA_VERSION. 6. Přidat migraci s ALTER TABLE … ADD COLUMN IF NOT EXISTS a zpětné vyplnění z extraction_json, namapovat sloupce v import_reports.py. 7. configure_postgresql.py && ingest.py.',
+        ],
+      },
+      {
+        kind: 'note',
+        title: 'Co to stojí',
+        text: [
+          'Re-extrakce čte cachovaný Markdown, žádné PDF se neparsuje znovu. Ale zvednutí SCHEMA_VERSION znovu spustí extrakci, chunking, embedding i import pro všech 16 dokumentů — a dvě ze čtyř fází jsou placené.',
+        ],
+      },
+    ],
     files: ['data/scripts/schemas.py', '.claude/skills/data-ingestion/SKILL.md'],
   },
   {
@@ -784,7 +895,25 @@ export const TOPICS: Topic[] = [
     title: 'Otevřené věci a další práce',
     lead: 'Co je známé a neřešené, co by to stálo a proč se to zatím nechalo být.',
     tech: ['svazky', 'OCR', 'prozaická příloha'],
-    what: [],
+    what: [
+      'Hotová a ověřená je celá cesta od PDF k odpovědi. Dvě věci zbývají a obě stojí placený přeběh celého korpusu, takže jsou rozhodnutím, ne běžnou prací.',
+      '1. Rozpad svazků na dílčí zprávy — největší otevřená strukturální věc. GF_P188240_ZZ Sedmirohé je jedenáct zpráv pod jedním přebalem (přebaly na stranách 1, 22, 43, 89, 108, 131, 150, 173, 197, 220, 242), Metan jih pět. _extract_toc bere první název pro dané číslo napříč všemi obsahy, takže jedenáct osnov splyne v jednu — 59 chunků Sedmirohé a 21 Metan jih sedí pod nadpisem z cizí dílčí zprávy.',
+      '2. Doladění extrakčního schématu — viz karta "Doladění schématu z extra_fields".',
+    ],
+    blocks: [
+      {
+        kind: 'table',
+        title: 'Menší otevřené věci',
+        table: {
+          head: ['co', 'stav', 'proč se to nechalo být'],
+          rows: [
+            ['Tři skeny bez OCR', 'mimo korpus', 'OCR je krok mimo pipeline; běh je ohlásí jako skipped a pokračuje dál'],
+            ['ZZ_Pazderna: 34 chunků pod "6.1 SEZNAM NOREM"', 'známé, neřešené', 'hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat'],
+            ['Monitoring: chunk #0 bez sekce', 'záměr pravidla', '"žádný titulek je lepší než špatný" — check_pipeline to hlásí jako chybu, i když jde jen o front matter'],
+          ],
+        },
+      },
+    ],
     files: ['README.md', 'CLAUDE.md'],
   },
 ]
