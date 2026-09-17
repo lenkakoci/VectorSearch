@@ -1,7 +1,8 @@
 import clsx from 'clsx'
-import { MessagesSquare, Search, SlidersHorizontal } from 'lucide-react'
+import { MessagesSquare, Search, SlidersHorizontal, Workflow } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ActiveFilters } from './components/ActiveFilters'
+import { ArchitectureView } from './components/ArchitectureView'
 import { AskView } from './components/AskView'
 import { CompareView } from './components/CompareView'
 import { DebugPanel } from './components/DebugPanel'
@@ -17,12 +18,19 @@ import { MODE_INFO } from './lib/modes'
 import { api } from './services/api'
 import type { Facets, Health, View } from './types'
 
-type Tab = 'search' | 'ask'
+type Tab = 'search' | 'ask' | 'architecture'
 
 const TABS: { id: Tab; label: string; hint: string; icon: typeof Search }[] = [
   { id: 'search', label: 'Vyhledávání', hint: 'najde pasáže', icon: Search },
   { id: 'ask', label: 'Zeptat se dokumentů', hint: 'složí odpověď s citacemi', icon: MessagesSquare },
+  { id: 'architecture', label: 'Architektura', hint: 'jak to celé funguje', icon: Workflow },
 ]
+
+const SUBTITLE: Record<Tab, string> = {
+  search: 'Demo vyhledávání v geologických posudcích: slova × význam × obojí × reranking',
+  ask: 'Odpověď složená jen z nalezených úryvků, u každé věty zdroj a ověřený citát',
+  architecture: 'Celá pipeline na jedné obrazovce, krok po kroku k rozkliknutí',
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('search')
@@ -91,11 +99,7 @@ export default function App() {
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">VectorSearch</h1>
-          <p className="text-sm text-slate-500">
-            {tab === 'search'
-              ? 'Demo vyhledávání v geologických posudcích: slova × význam × obojí × reranking'
-              : 'Odpověď složená jen z nalezených úryvků, u každé věty zdroj a ověřený citát'}
-          </p>
+          <p className="text-sm text-slate-500">{SUBTITLE[tab]}</p>
         </div>
         <p className="text-xs text-slate-400">
           {health
@@ -136,9 +140,8 @@ export default function App() {
         </div>
       )}
 
-      {tab === 'search' ? (
-        <SearchBar query={query} loading={state.status === 'loading'} onChange={setQuery} onSubmit={submit} />
-      ) : (
+      {tab === 'search' && <SearchBar query={query} loading={state.status === 'loading'} onChange={setQuery} onSubmit={submit} />}
+      {tab === 'ask' && (
         <SearchBar
           query={question}
           loading={asking}
@@ -153,6 +156,7 @@ export default function App() {
         />
       )}
 
+      {tab !== 'architecture' && (
       <div className="flex flex-wrap items-start justify-between gap-3">
         {tab === 'search' ? <ModeSwitch view={view} onChange={setView} /> : <p className="max-w-3xl text-sm text-slate-600">{MODE_INFO.rerank.explain}</p>}
         <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -244,13 +248,16 @@ export default function App() {
           </button>
         </div>
       </div>
+      )}
 
-      {filtersOpen && <FilterPanel facets={facets} state={filters} onChange={setFilters} />}
-      <ActiveFilters state={filters} facets={facets} onChange={setFilters} />
+      {tab !== 'architecture' && filtersOpen && <FilterPanel facets={facets} state={filters} onChange={setFilters} />}
+      {tab !== 'architecture' && <ActiveFilters state={filters} facets={facets} onChange={setFilters} />}
 
       {tab === 'ask' && (
         <AskView state={answerState} expertOpen={expertOpen} onExpert={setExpertOpen} />
       )}
+
+      {tab === 'architecture' && <ArchitectureView />}
 
       {tab === 'search' && (
         <>
