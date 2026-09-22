@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { DEMO_QUERIES } from '../lib/modes'
+import { QueryHelp } from './QueryHelp'
 
 interface Props {
   query: string
@@ -71,8 +72,8 @@ export function SearchBar({
           </button>
         ))}
         {hint && (
-          <span className="text-xs text-slate-400">
-            Tip: <code>autor:Poul</code>, <code>"přesná fráze"</code>, <code>-slovo</code>, <code>a or b</code>
+          <span className="ml-auto">
+            <QueryHelp />
           </span>
         )}
       </div>
