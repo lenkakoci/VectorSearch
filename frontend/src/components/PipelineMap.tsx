@@ -64,7 +64,7 @@ function PhaseBlock({ phaseId, activeId, onSelect }: { phaseId: PhaseId; activeI
           ))}
           <div className="grid grid-cols-1 gap-2 rounded-md border border-dashed border-slate-200 p-2 sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-brand-600">větev slov</p>
+              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-sand-700">větev slov</p>
               {fts.map(({ step, number }) => (
                 <StepBox key={step.id} step={step} number={number} active={step.id === activeId} onSelect={onSelect} />
               ))}

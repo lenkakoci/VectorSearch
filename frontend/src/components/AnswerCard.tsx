@@ -39,7 +39,7 @@ export function AnswerCard({ answer, active, onCite }: Props) {
   const gate = answer.trace.gate
 
   return (
-    <section className={clsx('rounded-lg border p-4 shadow-sm', status.panel)}>
+    <section className={clsx('rounded-lg border border-l-[6px] p-4 shadow-sm', status.panel)}>
       <header className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className={clsx('rounded-full px-3 py-0.5 text-sm font-semibold', status.badge)}>{status.label}</span>
         <p className="text-sm text-slate-600">{status.explain}</p>

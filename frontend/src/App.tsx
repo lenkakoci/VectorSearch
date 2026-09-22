@@ -1,11 +1,12 @@
 import clsx from 'clsx'
-import { Info, MessagesSquare, Search, Settings2, SlidersHorizontal, Workflow } from 'lucide-react'
+import { Columns3, FileText, Info, MessagesSquare, Search, Settings2, SlidersHorizontal, Workflow } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ActiveFilters } from './components/ActiveFilters'
 import { ArchitectureView } from './components/ArchitectureView'
 import { AskView } from './components/AskView'
 import { CompareView } from './components/CompareView'
 import { DebugPanel } from './components/DebugPanel'
+import { EmptyState, type EmptyStep } from './components/EmptyState'
 import { FilterPanel } from './components/FilterPanel'
 import { ModeSwitch } from './components/ModeSwitch'
 import { AskOptions, SearchOptions, ToggleButton } from './components/Options'
@@ -32,6 +33,16 @@ const SUBTITLE: Record<Tab, string> = {
   ask: 'Odpověď složená jen z nalezených úryvků, u každé věty zdroj a ověřený citát',
   architecture: 'Celá pipeline na jedné obrazovce, krok po kroku k rozkliknutí',
 }
+
+const SEARCH_STEPS: EmptyStep[] = [
+  { icon: Search, title: 'Zadejte dotaz', text: 'Slovy, jak by stálo v posudku, nebo vlastními. Nebo klikněte na některou z ukázek nad tímto řádkem.' },
+  {
+    icon: Columns3,
+    title: 'Porovnejte metody',
+    text: 'Režim Porovnat ukáže stejný dotaz fulltextem, sémanticky a hybridně vedle sebe. Stejné písmeno znamená stejný úryvek.',
+  },
+  { icon: FileText, title: 'Otevřete zdroj', text: 'Odkaz „PDF, s. 12“ otevře původní zprávu přesně na straně, odkud úryvek pochází.' },
+]
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('search')
@@ -228,11 +239,7 @@ export default function App() {
               </div>
             )}
 
-            {state.status === 'idle' && (
-              <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500">
-                Zadejte dotaz nebo klikněte na některý z ukázkových. Režim „Porovnat“ ukáže stejný dotaz několika způsoby vedle sebe.
-              </div>
-            )}
+            {state.status === 'idle' && <EmptyState steps={SEARCH_STEPS} />}
 
             {state.status !== 'idle' && state.status !== 'error' && (
               <div className={state.status === 'loading' ? 'opacity-50 transition' : ''}>

@@ -1,10 +1,11 @@
-import { Loader2 } from 'lucide-react'
+import { Loader2, MessagesSquare, Quote, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import type { AnswerState } from '../hooks/useAnswer'
 import { anchorOf } from '../lib/answers'
 import type { CheckedStatement } from '../types'
 import { AnswerCard } from './AnswerCard'
 import { AnswerProgress } from './AnswerProgress'
+import { EmptyState, type EmptyStep } from './EmptyState'
 import { PipelineTrace } from './PipelineTrace'
 import { SourceList, type Highlighted } from './SourceList'
 
@@ -13,6 +14,12 @@ interface Props {
   expertOpen: boolean
   onExpert: (open: boolean) => void
 }
+
+const ASK_STEPS: EmptyStep[] = [
+  { icon: MessagesSquare, title: 'Zeptejte se celou větou', text: 'Odpověď se složí jen z úryvků, které vyhledávání najde a které dostanou známku relevance.' },
+  { icon: Quote, title: 'Každá věta má zdroj', text: 'Číslo za větou je odkaz na úryvek. Kliknutím se zdroj otevře a ověřený citát v něm zvýrazní.' },
+  { icon: ShieldCheck, title: 'Bez podkladů nic nevymýšlí', text: 'Když v posudcích podklad není, systém odpoví „Bez podkladů“ a model se vůbec nezavolá.' },
+]
 
 export function AskView({ state, expertOpen, onExpert }: Props) {
   const [highlight, setHighlight] = useState<Highlighted | null>(null)
@@ -26,15 +33,7 @@ export function AskView({ state, expertOpen, onExpert }: Props) {
     }
   }
 
-  if (state.status === 'idle') {
-    return (
-      <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500">
-        Zeptejte se celou větou. Odpověď se složí jen z nalezených úryvků a u každé věty bude zdroj.
-        <br />
-        Když v posudcích podklad není, systém to řekne a nic si nevymyslí.
-      </div>
-    )
-  }
+  if (state.status === 'idle') return <EmptyState steps={ASK_STEPS} />
 
   if (state.status === 'error') {
     return (

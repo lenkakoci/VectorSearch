@@ -15,25 +15,25 @@ export const ANSWER_STATUS: Record<AnswerStatus, StatusInfo> = {
     label: 'Odpovězeno',
     explain: 'Každá věta má zdroj a doslovný citát, který server v citovaném úryvku opravdu našel.',
     badge: 'bg-leaf-700 text-white',
-    panel: 'border-leaf-200 bg-leaf-50',
+    panel: 'border-leaf-200 border-l-leaf-500 bg-leaf-50/60',
   },
   partial: {
     label: 'Částečně',
     explain: 'Zdroje odpovídají jen na část otázky, nebo některá věta neprošla kontrolou citací.',
     badge: 'bg-sand-600 text-white',
-    panel: 'border-sand-200 bg-sand-50',
+    panel: 'border-sand-200 border-l-sand-400 bg-sand-50/60',
   },
   insufficient: {
     label: 'Nedostatek podkladů',
     explain: 'Nalezené úryvky na otázku neodpovídají. Model nemá z čeho odpovědět a nic si nedomýšlí.',
     badge: 'bg-slate-600 text-white',
-    panel: 'border-slate-200 bg-slate-50',
+    panel: 'border-slate-200 border-l-slate-400 bg-white',
   },
   no_evidence: {
     label: 'Bez podkladů',
     explain: 'Žádný nalezený úryvek nedosáhl známky relevance. Model se vůbec nevolal.',
     badge: 'bg-slate-600 text-white',
-    panel: 'border-slate-200 bg-slate-50',
+    panel: 'border-slate-200 border-l-slate-400 bg-white',
   },
 }
 
