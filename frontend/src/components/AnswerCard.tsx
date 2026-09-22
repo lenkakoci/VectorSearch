@@ -23,7 +23,7 @@ function Citations({ statement, active, onCite }: { statement: CheckedStatement;
           title="Ukázat zdroj a zvýraznit v něm citát"
           className={clsx(
             'mx-0.5 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded px-1 align-baseline text-xs font-semibold transition',
-            active === id ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800 hover:bg-blue-200',
+            active === id ? 'bg-brand-700 text-white' : 'bg-brand-100 text-brand-800 hover:bg-brand-200',
           )}
         >
           {id}
@@ -54,18 +54,18 @@ export function AnswerCard({ answer, active, onCite }: Props) {
                 key={index}
                 className={clsx(
                   'rounded border-l-4 bg-white/70 py-1.5 pl-3 pr-2 text-slate-800',
-                  flagged ? 'border-amber-400' : 'border-green-500',
+                  flagged ? 'border-sand-400' : 'border-leaf-500',
                 )}
               >
-                <p className={clsx('leading-relaxed', flagged && 'underline decoration-amber-500 decoration-wavy underline-offset-4')}>
+                <p className={clsx('leading-relaxed', flagged && 'underline decoration-sand-500 decoration-wavy underline-offset-4')}>
                   {statement.text} <Citations statement={statement} active={active} onCite={onCite} />
                 </p>
                 {flagged && (
-                  <p className="mt-1 flex items-start gap-1 text-xs text-amber-800">
+                  <p className="mt-1 flex items-start gap-1 text-xs text-sand-800">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>
                       Neověřeno – {CHECK_INFO[statement.check]}
-                      {statement.note && <span className="text-amber-700"> ({statement.note})</span>}
+                      {statement.note && <span className="text-sand-700"> ({statement.note})</span>}
                     </span>
                   </p>
                 )}
@@ -90,8 +90,8 @@ export function AnswerCard({ answer, active, onCite }: Props) {
       )}
 
       {answer.conflicts.length > 0 && (
-        <div className="mt-3 rounded border border-amber-200 bg-white/70 p-3">
-          <h3 className="flex items-center gap-1 text-sm font-semibold text-amber-800">
+        <div className="mt-3 rounded border border-sand-200 bg-white/70 p-3">
+          <h3 className="flex items-center gap-1 text-sm font-semibold text-sand-800">
             <Scale className="h-4 w-4" />
             Rozpory mezi zdroji
           </h3>
@@ -111,7 +111,7 @@ export function AnswerCard({ answer, active, onCite }: Props) {
       <footer className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
         {validation && (
           <span className="inline-flex items-center gap-1">
-            <Check className="h-3.5 w-3.5 text-green-600" />
+            <Check className="h-3.5 w-3.5 text-leaf-600" />
             ověřeno {validation.verified} z {validation.statements} vět
           </span>
         )}

@@ -14,14 +14,14 @@ export const ANSWER_STATUS: Record<AnswerStatus, StatusInfo> = {
   answered: {
     label: 'Odpovězeno',
     explain: 'Každá věta má zdroj a doslovný citát, který server v citovaném úryvku opravdu našel.',
-    badge: 'bg-green-600 text-white',
-    panel: 'border-green-200 bg-green-50',
+    badge: 'bg-leaf-700 text-white',
+    panel: 'border-leaf-200 bg-leaf-50',
   },
   partial: {
     label: 'Částečně',
     explain: 'Zdroje odpovídají jen na část otázky, nebo některá věta neprošla kontrolou citací.',
-    badge: 'bg-amber-500 text-white',
-    panel: 'border-amber-200 bg-amber-50',
+    badge: 'bg-sand-600 text-white',
+    panel: 'border-sand-200 bg-sand-50',
   },
   insufficient: {
     label: 'Nedostatek podkladů',

@@ -54,7 +54,7 @@ export function MultiSelect({ options, selected, onChange, placeholder = 'vše',
         onClick={() => setOpen((value) => !value)}
         className={clsx(
           'flex w-full items-center justify-between gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm',
-          disabled ? 'border-slate-200 text-slate-400' : 'border-slate-300 text-slate-700 hover:border-blue-400',
+          disabled ? 'border-slate-200 text-slate-400' : 'border-slate-300 text-slate-700 hover:border-brand-400',
         )}
       >
         <span className="truncate">{summary}</span>
@@ -68,7 +68,7 @@ export function MultiSelect({ options, selected, onChange, placeholder = 'vše',
               value={needle}
               onChange={(event) => setNeedle(event.target.value)}
               placeholder="hledat v hodnotách…"
-              className="w-full rounded border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-300"
+              className="w-full rounded border border-slate-200 px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-brand-300"
             />
           </div>
           <ul className="max-h-64 overflow-auto py-1 text-sm">
@@ -92,7 +92,7 @@ export function MultiSelect({ options, selected, onChange, placeholder = 'vše',
           </ul>
           {selected.length > 0 && (
             <div className="border-t border-slate-100 p-2 text-right">
-              <button type="button" onClick={() => onChange([])} className="text-xs text-blue-600 hover:underline">
+              <button type="button" onClick={() => onChange([])} className="text-xs text-brand-600 hover:underline">
                 zrušit výběr
               </button>
             </div>

@@ -68,13 +68,13 @@ export const COST_INFO: Record<Cost, { label: string; badge: string; swatch: str
   },
   sql: {
     label: 'dotaz do PostgreSQL',
-    badge: 'bg-blue-100 text-blue-700',
-    swatch: 'bg-blue-500',
+    badge: 'bg-brand-100 text-brand-600',
+    swatch: 'bg-brand-500',
   },
   paid: {
     label: 'placené volání Gemini',
-    badge: 'bg-violet-100 text-violet-700',
-    swatch: 'bg-violet-500',
+    badge: 'bg-clay-100 text-clay-700',
+    swatch: 'bg-clay-400',
   },
 }
 

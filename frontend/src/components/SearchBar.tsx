@@ -43,13 +43,13 @@ export function SearchBar({
             value={query}
             onChange={(event) => onChange(event.target.value)}
             placeholder={placeholder}
-            className="w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-3 text-lg shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            className="w-full rounded-lg border border-slate-300 bg-white py-3 pl-10 pr-3 text-lg shadow-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
           />
         </label>
         <button
           type="submit"
           disabled={loading || !query.trim()}
-          className="rounded-lg bg-blue-600 px-5 py-3 font-medium text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="rounded-lg bg-brand-700 px-5 py-3 font-medium text-white shadow-sm hover:bg-brand-800 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
           {loading ? loadingLabel : submitLabel}
         </button>
@@ -65,7 +65,7 @@ export function SearchBar({
               onChange(demo.query)
               onSubmit(demo.query)
             }}
-            className="rounded-full border border-slate-300 bg-white px-3 py-1 text-slate-700 hover:border-blue-400 hover:text-blue-700"
+            className="rounded-full border border-slate-300 bg-white px-3 py-1 text-slate-700 hover:border-brand-400 hover:text-brand-600"
           >
             {demo.query}
           </button>

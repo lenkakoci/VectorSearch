@@ -18,7 +18,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (on: boolean) 
         onClick={() => onChange(!on)}
         className={clsx(
           'relative inline-block h-5 w-9 rounded-full transition',
-          on ? 'bg-blue-600' : 'bg-slate-300',
+          on ? 'bg-brand-700' : 'bg-slate-300',
         )}
       >
         <span
@@ -54,7 +54,7 @@ export function FilterPanel({ facets, state, onChange }: Props) {
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="font-semibold text-slate-700">Upřesnit hledání</h2>
-        <button type="button" onClick={() => onChange(emptyFilters())} className="text-sm text-blue-600 hover:underline">
+        <button type="button" onClick={() => onChange(emptyFilters())} className="text-sm text-brand-600 hover:underline">
           Vymazat filtry
         </button>
       </div>

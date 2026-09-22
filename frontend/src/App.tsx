@@ -135,7 +135,7 @@ export default function App() {
       </div>
 
       {backendError && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
           Nepodařilo se načíst číselníky filtrů: {backendError}. Běží API na portu 8010?
         </div>
       )}
@@ -240,11 +240,11 @@ export default function App() {
           <button
             type="button"
             onClick={() => setFiltersOpen((value) => !value)}
-            className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:border-blue-400"
+            className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:border-brand-400"
           >
             <SlidersHorizontal className="h-4 w-4" />
             {tab === 'search' ? 'Upřesnit hledání' : 'Omezit podklady'}
-            {activeFilters > 0 && <span className="rounded-full bg-blue-600 px-1.5 text-xs text-white">{activeFilters}</span>}
+            {activeFilters > 0 && <span className="rounded-full bg-brand-700 px-1.5 text-xs text-white">{activeFilters}</span>}
           </button>
         </div>
       </div>
@@ -262,7 +262,7 @@ export default function App() {
       {tab === 'search' && (
         <>
           {state.status === 'error' && (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
               {state.error}
               {state.error?.startsWith('503') && view !== 'fts' && (
                 <button type="button" onClick={() => setView('fts')} className="ml-2 underline">

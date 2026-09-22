@@ -62,9 +62,9 @@ export function StepDetail({ detail, onClose }: Props) {
         <Section title="Záludnosti">
           <dl className="space-y-2">
             {detail.gotchas.map((item) => (
-              <div key={item.title} className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
-                <dt className="font-medium text-amber-900">{item.title}</dt>
-                <dd className="mt-0.5 text-amber-800">{item.text}</dd>
+              <div key={item.title} className="rounded-md border border-sand-200 bg-sand-50 p-2 text-xs">
+                <dt className="font-medium text-sand-900">{item.title}</dt>
+                <dd className="mt-0.5 text-sand-800">{item.text}</dd>
               </div>
             ))}
           </dl>
@@ -133,7 +133,7 @@ function BlockView({ block }: { block: Block }) {
   }
   if (block.kind === 'note') {
     return (
-      <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+      <div className="rounded-md border border-brand-200 bg-brand-50 p-2 text-xs text-brand-900">
         {block.title && <p className="mb-0.5 font-medium">{block.title}</p>}
         {block.text?.map((paragraph, index) => (
           <p key={index}>{paragraph}</p>
@@ -144,7 +144,7 @@ function BlockView({ block }: { block: Block }) {
   if (block.kind === 'code') {
     return (
       <Section title={block.title ?? 'Kód'}>
-        <pre className="overflow-x-auto rounded-md bg-slate-900 p-2.5 text-[11px] leading-snug text-slate-100">
+        <pre className="overflow-x-auto rounded-md bg-brand-950 p-2.5 text-[11px] leading-snug text-slate-100">
           <code>{block.code}</code>
         </pre>
       </Section>

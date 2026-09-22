@@ -151,7 +151,7 @@ export function PipelineTrace({ answer, request, ms: total, open, onToggle }: Pr
               key={step.name}
               className={clsx(
                 'grid grid-cols-[1.5rem_9rem_1fr_auto_auto] items-baseline gap-2 border-l-2 py-1 pl-2 text-xs',
-                step.skipped ? 'border-slate-200 text-slate-400' : 'border-blue-200 text-slate-700',
+                step.skipped ? 'border-slate-200 text-slate-400' : 'border-brand-200 text-slate-700',
               )}
             >
               <span className="text-slate-400">{index + 1}.</span>

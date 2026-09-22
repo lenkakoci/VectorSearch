@@ -45,9 +45,9 @@ export function AnswerProgress({ steps }: Props) {
         return (
           <li key={`${step.step}-${index}`} className={clsx('flex items-center gap-2', last ? 'text-slate-700' : 'text-slate-500')}>
             {last ? (
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" />
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-brand-600" />
             ) : (
-              <Check className="h-3.5 w-3.5 shrink-0 text-green-600" />
+              <Check className="h-3.5 w-3.5 shrink-0 text-leaf-600" />
             )}
             <span>{describe(step)}</span>
           </li>

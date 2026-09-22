@@ -32,7 +32,7 @@ export function DocumentInfo({ documentId }: Props) {
     }
   }, [documentId])
 
-  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (error) return <p className="text-xs text-clay-600">{error}</p>
   if (!doc) return <p className="text-xs text-slate-400">načítám…</p>
 
   const extraction = doc.extraction

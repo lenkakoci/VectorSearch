@@ -1,20 +1,10 @@
 import clsx from 'clsx'
 import { useMemo } from 'react'
 import { COMPARE_MODES, MODE_INFO, MODES } from '../lib/modes'
+import { TAG_PALETTE } from '../lib/tone'
 import type { CompareResponse, Mode, RequestFilters, SearchResponse } from '../types'
 import { ResultList } from './ResultList'
 import type { Tag } from './ResultCard'
-
-const PALETTE = [
-  'bg-rose-200 text-rose-900',
-  'bg-emerald-200 text-emerald-900',
-  'bg-sky-200 text-sky-900',
-  'bg-amber-200 text-amber-900',
-  'bg-violet-200 text-violet-900',
-  'bg-teal-200 text-teal-900',
-  'bg-orange-200 text-orange-900',
-  'bg-lime-200 text-lime-900',
-]
 
 interface Props {
   data: CompareResponse
@@ -41,7 +31,7 @@ function assignTags(data: CompareResponse, modes: Mode[]): Map<string, Tag> {
   for (const mode of modes) {
     for (const hit of responseOf(data, mode).hits) {
       if ((seen.get(hit.chunk_id) ?? 0) > 1 && !tags.has(hit.chunk_id)) {
-        tags.set(hit.chunk_id, { letter: String.fromCharCode(65 + (next % 26)), className: PALETTE[next % PALETTE.length] })
+        tags.set(hit.chunk_id, { letter: String.fromCharCode(65 + (next % 26)), className: TAG_PALETTE[next % TAG_PALETTE.length] })
         next += 1
       }
     }

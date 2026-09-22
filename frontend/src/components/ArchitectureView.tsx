@@ -56,7 +56,7 @@ export function ArchitectureView() {
           <button
             type="button"
             onClick={() => setExpandAll((value) => !value)}
-            className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:border-blue-400"
+            className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 hover:border-brand-400"
           >
             {expandAll ? 'Skrýt podrobnosti' : 'Rozbalit vše (pro tisk)'}
           </button>
@@ -78,7 +78,7 @@ export function ArchitectureView() {
               onClick={() => setActiveId(topic.id)}
               className={clsx(
                 'rounded-lg border p-3 text-left text-xs transition',
-                activeId === topic.id ? 'border-slate-900 bg-slate-900 text-white shadow' : 'border-slate-200 bg-white hover:border-blue-400',
+                activeId === topic.id ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-white hover:border-brand-400',
               )}
             >
               <span
@@ -90,7 +90,7 @@ export function ArchitectureView() {
                 {topic.tag}
               </span>
               <p className="font-medium">{topic.title}</p>
-              <p className={clsx('mt-0.5', activeId === topic.id ? 'text-slate-300' : 'text-slate-500')}>{topic.lead}</p>
+              <p className={clsx('mt-0.5', activeId === topic.id ? 'text-brand-100' : 'text-slate-500')}>{topic.lead}</p>
             </button>
           ))}
         </div>

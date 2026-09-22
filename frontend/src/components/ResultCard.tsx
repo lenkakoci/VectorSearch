@@ -5,6 +5,7 @@ import { Highlight } from '../lib/highlight'
 import { api } from '../services/api'
 import { formatModeScore, MAX_GRADE, MODE_INFO, scoreOf } from '../lib/modes'
 import type { Branch, Hit, Mode } from '../types'
+import { FOUND_CLASS as BADGE, GRADE_CLASS } from '../lib/tone'
 import { ContextView } from './ContextView'
 import { DocumentInfo } from './DocumentInfo'
 import { ScoreBreakdown } from './ScoreBreakdown'
@@ -34,21 +35,6 @@ interface Badge {
   title: string
 }
 
-const BADGE = {
-  words: 'bg-blue-100 text-blue-800',
-  meaning: 'bg-purple-100 text-purple-800',
-  both: 'bg-green-100 text-green-800',
-  none: 'bg-amber-100 text-amber-800',
-  annex: 'bg-slate-200 text-slate-700',
-}
-
-const GRADE_CLASS: Record<number, string> = {
-  3: 'bg-green-600 text-white',
-  2: 'bg-teal-600 text-white',
-  1: 'bg-amber-200 text-amber-900',
-  0: 'bg-slate-200 text-slate-600',
-}
-
 // Which method found the chunk. With both branches run, membership in each
 // candidate list decides; with one branch, lexical_match still says whether
 // any of the query's words is there at all.
@@ -64,7 +50,7 @@ function foundBadges(hit: Hit, branches: Branch[]): Badge[] {
   }
   if (branches[0] === 'fts') return [{ label: 'slova', className: BADGE.words, title: 'Nalezeno podle slov' }]
   return hit.lexical_match
-    ? [{ label: 'význam', className: BADGE.meaning, title: 'Nalezeno podle významu' }, { label: 'obsahuje hledaná slova', className: 'bg-slate-100 text-slate-600', title: '' }]
+    ? [{ label: 'význam', className: BADGE.meaning, title: 'Nalezeno podle významu' }, { label: 'obsahuje hledaná slova', className: BADGE.neutral, title: '' }]
     : [{ label: 'význam', className: BADGE.meaning, title: 'Nalezeno podle významu' }, { label: 'bez shody slov', className: BADGE.none, title: 'Žádné hledané slovo v textu není – shoda je čistě významová' }]
 }
 
@@ -86,7 +72,7 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
     <button
       type="button"
       onClick={() => toggle(key)}
-      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-blue-700')}
+      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-brand-600')}
     >
       {label}
     </button>
@@ -148,7 +134,7 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
 
       <div className="mt-2 flex items-center gap-2 text-xs">
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" title={`${MODE_INFO[mode].scoreLabel} (lišta je relativní k nejlepšímu výsledku)`}>
-          <div className="h-full rounded-full bg-blue-500" style={{ width: `${percent}%` }} />
+          <div className="h-full rounded-full bg-brand-500" style={{ width: `${percent}%` }} />
         </div>
         <span className="w-20 text-right font-mono text-slate-600" title={MODE_INFO[mode].scoreLabel}>
           {formatModeScore(hit, mode)}
@@ -183,7 +169,7 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
           href={api.pdfUrl(hit.document_id, hit.page_from)}
           target="_blank"
           rel="noreferrer"
-          className="rounded px-2 py-0.5 text-blue-700 hover:bg-slate-100"
+          className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100"
           title="Otevře zdrojové PDF na straně tohoto úryvku"
         >
           {hit.page_from ? `PDF, s. ${hit.page_from}` : 'PDF'}

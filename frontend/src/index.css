@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 body {
-  @apply bg-slate-50 text-slate-800;
+  @apply bg-slate-50 font-sans text-slate-700 antialiased;
 }
 
 mark {
-  @apply rounded bg-yellow-200 px-0.5 text-inherit;
+  @apply rounded bg-sand-200 px-0.5 text-inherit;
 }

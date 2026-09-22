@@ -46,7 +46,7 @@ export function QuoteHighlight({ text, quotes }: { text: string; quotes: string[
     <>
       {parts.map((part, index) =>
         index % 2 === 1 ? (
-          <mark key={index} className="rounded bg-amber-200 px-0.5">
+          <mark key={index} className="rounded bg-sand-200 px-0.5">
             {part}
           </mark>
         ) : (

@@ -64,13 +64,13 @@ function PhaseBlock({ phaseId, activeId, onSelect }: { phaseId: PhaseId; activeI
           ))}
           <div className="grid grid-cols-1 gap-2 rounded-md border border-dashed border-slate-200 p-2 sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-blue-600">větev slov</p>
+              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-brand-600">větev slov</p>
               {fts.map(({ step, number }) => (
                 <StepBox key={step.id} step={step} number={number} active={step.id === activeId} onSelect={onSelect} />
               ))}
             </div>
             <div className="space-y-1">
-              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-purple-600">větev významu</p>
+              <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-brand-600">větev významu</p>
               {vector.map(({ step, number }) => (
                 <StepBox key={step.id} step={step} number={number} active={step.id === activeId} onSelect={onSelect} />
               ))}
@@ -110,17 +110,17 @@ function StepBox({
       onClick={() => onSelect(step.id)}
       className={clsx(
         'flex w-full flex-col items-start gap-0.5 rounded-md border px-2.5 py-2 text-left text-xs transition',
-        active ? 'border-slate-900 bg-slate-900 text-white shadow' : 'border-slate-200 bg-slate-50 hover:border-blue-400 hover:bg-white',
+        active ? 'border-brand-700 bg-brand-700 text-white shadow' : 'border-slate-200 bg-slate-50 hover:border-brand-400 hover:bg-white',
       )}
     >
       <span className="flex w-full items-center gap-1.5">
         <span className={clsx('h-2 w-2 shrink-0 rounded-full', cost.swatch)} />
-        <span className={clsx('shrink-0 font-mono', active ? 'text-slate-300' : 'text-slate-400')}>{number}</span>
+        <span className={clsx('shrink-0 font-mono', active ? 'text-brand-200' : 'text-slate-400')}>{number}</span>
         <span className="truncate font-medium">{step.title}</span>
         {guarded && <span title="Bezpečnostní opatření">🛡</span>}
       </span>
       {step.artifact && (
-        <span className={clsx('truncate font-mono text-[10px]', active ? 'text-slate-300' : 'text-slate-400')}>→ {step.artifact}</span>
+        <span className={clsx('truncate font-mono text-[10px]', active ? 'text-brand-200' : 'text-slate-400')}>→ {step.artifact}</span>
       )}
     </button>
   )

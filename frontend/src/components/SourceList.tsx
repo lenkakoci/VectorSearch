@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { anchorOf, pagesOf, ROLE_INFO } from '../lib/answers'
 import { QuoteHighlight } from '../lib/highlight'
 import { MAX_GRADE } from '../lib/modes'
+import { GRADE_CLASS } from '../lib/tone'
 import type { AnswerSource } from '../types'
 import { api } from '../services/api'
 import { ContextView } from './ContextView'
@@ -22,13 +23,6 @@ interface Props {
 }
 
 type Panel = 'none' | 'context' | 'document'
-
-const GRADE_CLASS: Record<number, string> = {
-  3: 'bg-green-600 text-white',
-  2: 'bg-teal-600 text-white',
-  1: 'bg-amber-200 text-amber-900',
-  0: 'bg-slate-200 text-slate-600',
-}
 
 function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Highlighted | null }) {
   const active = highlight?.id === source.id
@@ -49,7 +43,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
     <button
       type="button"
       onClick={() => toggle(key)}
-      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-blue-700')}
+      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-brand-600')}
     >
       {label}
     </button>
@@ -60,7 +54,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
       id={anchorOf(source.id)}
       className={clsx(
         'scroll-mt-4 rounded-lg border bg-white p-3 shadow-sm transition',
-        active ? 'border-blue-400 ring-2 ring-blue-200' : source.cited ? 'border-slate-300' : 'border-slate-200',
+        active ? 'border-brand-400 ring-2 ring-brand-200' : source.cited ? 'border-slate-300' : 'border-slate-200',
         !source.cited && !open && 'bg-slate-50',
       )}
     >
@@ -68,7 +62,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
         <span
           className={clsx(
             'mt-0.5 inline-flex h-6 min-w-[1.5rem] shrink-0 items-center justify-center rounded px-1 text-sm font-semibold',
-            source.cited ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600',
+            source.cited ? 'bg-brand-700 text-white' : 'bg-slate-200 text-slate-600',
           )}
         >
           {source.id}
@@ -79,7 +73,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
           </h3>
           <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
             {source.cited && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">
+              <span className="inline-flex items-center gap-1 rounded-full bg-brand-100 px-2 py-0.5 font-medium text-brand-800">
                 <Quote className="h-3 w-3" />
                 citováno
               </span>
@@ -137,7 +131,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
       {open && metadata.length > 0 && <p className="mt-2 text-xs text-slate-500">{metadata.join(' · ')}</p>}
 
       <div className="mt-2 flex flex-wrap gap-1 text-xs">
-        <button type="button" onClick={() => setOpen((value) => !value)} className="rounded px-2 py-0.5 text-blue-700 hover:bg-slate-100">
+        <button type="button" onClick={() => setOpen((value) => !value)} className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100">
           {open ? 'Sbalit' : 'Celý text'}
         </button>
         {action('Kontext ±1', 'context')}
@@ -146,7 +140,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
           href={api.pdfUrl(source.document_id, source.page_from)}
           target="_blank"
           rel="noreferrer"
-          className="rounded px-2 py-0.5 text-blue-700 hover:bg-slate-100"
+          className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100"
           title="Otevře zdrojové PDF na straně, kterou citace uvádí"
         >
           {source.page_from ? `PDF, s. ${source.page_from}` : 'PDF'}

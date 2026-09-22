@@ -24,12 +24,12 @@ export function ActiveFilters({ state, facets, onChange }: Props) {
       {items.map((chip) => (
         <span
           key={`${chip.key}:${chip.value ?? ''}`}
-          className="inline-flex max-w-xs items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-blue-800 ring-1 ring-blue-200"
+          className="inline-flex max-w-xs items-center gap-1 rounded-full bg-brand-50 px-3 py-1 text-brand-800 ring-1 ring-brand-200"
         >
           <span className="truncate" title={chip.label}>
             {chip.label}
           </span>
-          <button type="button" onClick={() => remove(chip.key, chip.value)} aria-label="odebrat filtr" className="hover:text-blue-950">
+          <button type="button" onClick={() => remove(chip.key, chip.value)} aria-label="odebrat filtr" className="hover:text-brand-950">
             <X className="h-3.5 w-3.5" />
           </button>
         </span>

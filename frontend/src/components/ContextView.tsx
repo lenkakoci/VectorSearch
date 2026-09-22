@@ -31,7 +31,7 @@ export function ContextView({ documentId, chunkIndex }: Props) {
     }
   }, [documentId, chunkIndex, reach])
 
-  if (error) return <p className="text-xs text-red-600">{error}</p>
+  if (error) return <p className="text-xs text-clay-600">{error}</p>
   if (!data) return <p className="text-xs text-slate-400">načítám kontext…</p>
 
   return (
@@ -42,7 +42,7 @@ export function ContextView({ documentId, chunkIndex }: Props) {
           type="button"
           onClick={() => setReach((value) => Math.min(5, value + 1))}
           disabled={reach >= 5}
-          className="text-blue-600 hover:underline disabled:text-slate-300"
+          className="text-brand-600 hover:underline disabled:text-slate-300"
         >
           rozšířit (±{reach + 1})
         </button>
@@ -52,7 +52,7 @@ export function ContextView({ documentId, chunkIndex }: Props) {
           key={chunk.chunk_index}
           className={clsx(
             'rounded-md border p-2',
-            chunk.is_hit ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white text-slate-600',
+            chunk.is_hit ? 'border-brand-300 bg-brand-50' : 'border-slate-200 bg-white text-slate-600',
           )}
         >
           <div className="mb-1 flex flex-wrap gap-x-2 text-[11px] text-slate-500">
@@ -60,7 +60,7 @@ export function ContextView({ documentId, chunkIndex }: Props) {
             {chunk.section && <span>{chunk.section}</span>}
             {pages(chunk.page_from, chunk.page_to) && <span>{pages(chunk.page_from, chunk.page_to)}</span>}
             {chunk.content_kind === 'annex' && <span className="uppercase">příloha</span>}
-            {chunk.is_hit && <span className="font-semibold text-blue-700">nalezený chunk</span>}
+            {chunk.is_hit && <span className="font-semibold text-brand-600">nalezený chunk</span>}
           </div>
           <p className="whitespace-pre-wrap">{chunk.chunk_raw}</p>
         </div>

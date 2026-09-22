@@ -35,7 +35,7 @@ export function ResultList({ response, compact, tags, emptyReason }: Props) {
         return (
           <Fragment key={hit.chunk_id}>
             {firstBelow && (
-              <div className="border-t-2 border-dashed border-amber-300 pt-2 text-xs text-amber-800">
+              <div className="border-t-2 border-dashed border-sand-300 pt-2 text-xs text-sand-800">
                 Pod prahem relevance: známka nižší než {minGrade}. Do odpovědi by tyto úryvky nešly.
               </div>
             )}
