@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { MessagesSquare, Search, SlidersHorizontal, Workflow } from 'lucide-react'
+import { Info, MessagesSquare, Search, Settings2, SlidersHorizontal, Workflow } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ActiveFilters } from './components/ActiveFilters'
 import { ArchitectureView } from './components/ArchitectureView'
@@ -8,6 +8,7 @@ import { CompareView } from './components/CompareView'
 import { DebugPanel } from './components/DebugPanel'
 import { FilterPanel } from './components/FilterPanel'
 import { ModeSwitch } from './components/ModeSwitch'
+import { AskOptions, SearchOptions, ToggleButton } from './components/Options'
 import { ResultList } from './components/ResultList'
 import { SearchBar } from './components/SearchBar'
 import { useAnswer } from './hooks/useAnswer'
@@ -20,10 +21,10 @@ import type { Facets, Health, View } from './types'
 
 type Tab = 'search' | 'ask' | 'architecture'
 
-const TABS: { id: Tab; label: string; hint: string; icon: typeof Search }[] = [
-  { id: 'search', label: 'Vyhledávání', hint: 'najde pasáže', icon: Search },
-  { id: 'ask', label: 'Zeptat se dokumentů', hint: 'složí odpověď s citacemi', icon: MessagesSquare },
-  { id: 'architecture', label: 'Architektura', hint: 'jak to celé funguje', icon: Workflow },
+const TABS: { id: Tab; label: string; icon: typeof Search }[] = [
+  { id: 'search', label: 'Vyhledávání', icon: Search },
+  { id: 'ask', label: 'Zeptat se dokumentů', icon: MessagesSquare },
+  { id: 'architecture', label: 'Architektura', icon: Workflow },
 ]
 
 const SUBTITLE: Record<Tab, string> = {
@@ -45,6 +46,7 @@ export default function App() {
   const [fresh, setFresh] = useState(false)
   const [filters, setFilters] = useState<FilterState>(emptyFilters)
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   const [debugOpen, setDebugOpen] = useState(false)
   const [expertOpen, setExpertOpen] = useState(false)
   const [facets, setFacets] = useState<Facets | null>(null)
@@ -93,219 +95,174 @@ export default function App() {
   const activeFilters = countActive(filters)
   const requestFilters = toRequestFilters(filters)
   const asking = answerState.status === 'loading'
+  const explain = (
+    <p className="flex max-w-4xl flex-1 items-start gap-2 rounded-md border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-900">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-brand-500" />
+      <span>{tab === 'search' ? MODE_INFO[view].explain : MODE_INFO.rerank.explain}</span>
+    </p>
+  )
 
   return (
-    <div className="mx-auto max-w-[96rem] space-y-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">VectorSearch</h1>
-          <p className="text-sm text-slate-500">{SUBTITLE[tab]}</p>
+    <div className="min-h-screen">
+      <header className="bg-brand-900 text-white shadow">
+        <div className="mx-auto flex max-w-[96rem] flex-wrap items-center gap-x-8 gap-y-2 px-4 md:px-6">
+          <div className="flex items-baseline gap-2 py-3">
+            <span className="text-xl font-bold tracking-tight">VectorSearch</span>
+            <span className="text-sm text-brand-200">geologické posudky</span>
+          </div>
+          <nav className="flex flex-1 flex-wrap self-stretch" role="tablist">
+            {TABS.map((item) => {
+              const Icon = item.icon
+              const active = item.id === tab
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(item.id)}
+                  className={clsx(
+                    'flex items-center gap-2 border-b-4 px-4 py-3 text-sm font-medium transition',
+                    active ? 'border-leaf-500 bg-white/10 text-white' : 'border-transparent text-brand-100 hover:bg-white/5 hover:text-white',
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </button>
+              )
+            })}
+          </nav>
+          <p className={clsx('py-3 text-xs', backendError && !health ? 'font-medium text-clay-200' : 'text-brand-200')}>
+            {health
+              ? `${health.documents} dokumentů · ${health.chunks} chunků · ${health.chunks_with_vector} s vektorem`
+              : backendError
+                ? 'API nedostupné'
+                : ''}
+          </p>
         </div>
-        <p className="text-xs text-slate-400">
-          {health
-            ? `${health.documents} dokumentů · ${health.chunks} chunků · ${health.chunks_with_vector} s vektorem`
-            : backendError
-              ? 'API nedostupné'
-              : ''}
-        </p>
       </header>
 
-      <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 shadow-sm" role="tablist">
-        {TABS.map((item) => {
-          const Icon = item.icon
-          const active = item.id === tab
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTab(item.id)}
-              className={clsx(
-                'flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition',
-                active ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:bg-slate-100',
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-              <span className={clsx('text-xs', active ? 'text-slate-300' : 'text-slate-400')}>{item.hint}</span>
-            </button>
-          )
-        })}
-      </div>
+      <main className="mx-auto max-w-[96rem] space-y-4 p-4 md:p-6">
+        <p className="text-sm text-slate-600">{SUBTITLE[tab]}</p>
 
-      {backendError && (
-        <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
-          Nepodařilo se načíst číselníky filtrů: {backendError}. Běží API na portu 8010?
-        </div>
-      )}
+        {backendError && (
+          <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
+            Nepodařilo se načíst číselníky filtrů: {backendError}. Běží API na portu 8010?
+          </div>
+        )}
 
-      {tab === 'search' && <SearchBar query={query} loading={state.status === 'loading'} onChange={setQuery} onSubmit={submit} />}
-      {tab === 'ask' && (
-        <SearchBar
-          query={question}
-          loading={asking}
-          onChange={setQuestion}
-          onSubmit={submitQuestion}
-          placeholder="Na co se chcete zeptat? Např. Kolik vrtů se v Roudně navrhuje?"
-          label="Na co se chcete zeptat?"
-          submitLabel="Zeptat se"
-          loadingLabel="Odpovídám…"
-          suggestions={DEMO_QUESTIONS.map((demo) => ({ query: demo.question, why: demo.why }))}
-          hint={false}
-        />
-      )}
+        {tab === 'search' && <SearchBar query={query} loading={state.status === 'loading'} onChange={setQuery} onSubmit={submit} />}
+        {tab === 'ask' && (
+          <SearchBar
+            query={question}
+            loading={asking}
+            onChange={setQuestion}
+            onSubmit={submitQuestion}
+            placeholder="Na co se chcete zeptat? Např. Kolik vrtů se v Roudně navrhuje?"
+            label="Na co se chcete zeptat?"
+            submitLabel="Zeptat se"
+            loadingLabel="Odpovídám…"
+            suggestions={DEMO_QUESTIONS.map((demo) => ({ query: demo.question, why: demo.why }))}
+            hint={false}
+          />
+        )}
 
-      {tab !== 'architecture' && (
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        {tab === 'search' ? <ModeSwitch view={view} onChange={setView} /> : <p className="max-w-3xl text-sm text-slate-600">{MODE_INFO.rerank.explain}</p>}
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          {tab === 'search' && view === 'compare' && (
-            <label
-              className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700"
-              title="Přidá sloupec, ve kterém Gemini ohodnotí 40 kandidátů. Stojí jedno až dvě volání API na dotaz."
-            >
-              <input type="checkbox" checked={rerank} onChange={(event) => setRerank(event.target.checked)} className="h-4 w-4" />
-              + reranking
-              <span className="text-xs text-slate-400">Gemini</span>
-            </label>
-          )}
-          {tab === 'search' && (
-            <label className="flex items-center gap-1 text-slate-600">
-              výsledků
-              <select
-                value={limit}
-                onChange={(event) => setLimit(Number(event.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1"
-              >
-                {[3, 5, 10, 20].map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {tab === 'ask' && (
-            <>
-              <label className="flex items-center gap-1 text-slate-600" title="Nejvýš tolik úryvků půjde modelu jako podklad.">
-                zdrojů
-                <select
-                  value={maxSources}
-                  onChange={(event) => setMaxSources(Number(event.target.value))}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-1"
-                >
-                  {[4, 6, 8, 12].map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex items-center gap-1 text-slate-600" title="Známka od rerankeru, pod kterou se úryvek do odpovědi nedostane.">
-                známka aspoň
-                <select
-                  value={minGrade}
-                  onChange={(event) => setMinGrade(Number(event.target.value))}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-1"
-                >
-                  {[1, 2, 3].map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label
-                className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700"
-                title="Přidá sousední úryvek tam, kde je sekce rozdělená do víc oken."
-              >
-                <input
-                  type="checkbox"
-                  checked={neighbours}
-                  onChange={(event) => setNeighbours(event.target.checked)}
-                  className="h-4 w-4"
+        {tab !== 'architecture' && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              {tab === 'search' ? <ModeSwitch view={view} onChange={setView} /> : explain}
+              <div className="flex flex-wrap items-center gap-2">
+                <ToggleButton
+                  icon={<Settings2 className="h-4 w-4" />}
+                  label={tab === 'search' ? 'Nastavení' : 'Pokročilé'}
+                  open={optionsOpen}
+                  onClick={() => setOptionsOpen((value) => !value)}
                 />
-                sousedé
-              </label>
-              <label
-                className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700"
-                title="Stejná otázka se jinak vrátí z cache. Zaškrtnutím se odpověď spočítá znovu a zaplatí."
-              >
-                <input type="checkbox" checked={fresh} onChange={(event) => setFresh(event.target.checked)} className="h-4 w-4" />
-                nová odpověď
-              </label>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((value) => !value)}
-            className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:border-brand-400"
-          >
-            <SlidersHorizontal className="h-4 w-4" />
-            {tab === 'search' ? 'Upřesnit hledání' : 'Omezit podklady'}
-            {activeFilters > 0 && <span className="rounded-full bg-brand-700 px-1.5 text-xs text-white">{activeFilters}</span>}
-          </button>
-        </div>
-      </div>
-      )}
-
-      {tab !== 'architecture' && filtersOpen && <FilterPanel facets={facets} state={filters} onChange={setFilters} />}
-      {tab !== 'architecture' && <ActiveFilters state={filters} facets={facets} onChange={setFilters} />}
-
-      {tab === 'ask' && (
-        <AskView state={answerState} expertOpen={expertOpen} onExpert={setExpertOpen} />
-      )}
-
-      {tab === 'architecture' && <ArchitectureView />}
-
-      {tab === 'search' && (
-        <>
-          {state.status === 'error' && (
-            <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
-              {state.error}
-              {state.error?.startsWith('503') && view !== 'fts' && (
-                <button type="button" onClick={() => setView('fts')} className="ml-2 underline">
-                  přepnout na fulltext
-                </button>
-              )}
+                <ToggleButton
+                  icon={<SlidersHorizontal className="h-4 w-4" />}
+                  label={tab === 'search' ? 'Filtry' : 'Omezit podklady'}
+                  open={filtersOpen}
+                  count={activeFilters}
+                  onClick={() => setFiltersOpen((value) => !value)}
+                />
+              </div>
             </div>
-          )}
+            {tab === 'search' && explain}
+            {optionsOpen && tab === 'search' && (
+              <SearchOptions limit={limit} onLimit={setLimit} rerank={rerank} onRerank={setRerank} compare={view === 'compare'} />
+            )}
+            {optionsOpen && tab === 'ask' && (
+              <AskOptions
+                maxSources={maxSources}
+                onMaxSources={setMaxSources}
+                minGrade={minGrade}
+                onMinGrade={setMinGrade}
+                neighbours={neighbours}
+                onNeighbours={setNeighbours}
+                fresh={fresh}
+                onFresh={setFresh}
+              />
+            )}
+          </div>
+        )}
 
-          {state.status === 'idle' && (
-            <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500">
-              Zadejte dotaz nebo klikněte na některý z ukázkových. Režim „Porovnat“ ukáže stejný dotaz několika způsoby vedle sebe.
-            </div>
-          )}
+        {tab !== 'architecture' && filtersOpen && <FilterPanel facets={facets} state={filters} onChange={setFilters} />}
+        {tab !== 'architecture' && <ActiveFilters state={filters} facets={facets} onChange={setFilters} />}
 
-          {state.status !== 'idle' && state.status !== 'error' && (
-            <div className={state.status === 'loading' ? 'opacity-50 transition' : ''}>
-              {state.view === 'compare' && state.compare && <CompareView data={state.compare} filters={requestFilters} />}
-              {state.view !== 'compare' && state.single && (
-                <div className="space-y-2">
-                  <p className="text-xs text-slate-500">
-                    {MODE_INFO[state.single.mode].label}: {state.single.hits.length} výsledků pro „{state.single.query}“
-                    {state.single.debug.fts_candidates != null && state.single.mode === 'hybrid' && (
-                      <>
-                        {' '}· kandidátů: vektor {state.single.debug.vector_candidates}, fulltext {state.single.debug.fts_candidates}
-                      </>
-                    )}
-                    {state.single.debug.rerank && (
-                      <>
-                        {' '}· {state.single.debug.rerank.passed} z {state.single.debug.rerank.candidates} kandidátů má známku aspoň{' '}
-                        {state.single.debug.rerank.min_grade}
-                      </>
-                    )}
-                  </p>
-                  <ResultList response={state.single} />
-                </div>
-              )}
-            </div>
-          )}
+        {tab === 'ask' && (
+          <AskView state={answerState} expertOpen={expertOpen} onExpert={setExpertOpen} />
+        )}
 
-          <DebugPanel state={state} open={debugOpen} onToggle={setDebugOpen} />
-        </>
-      )}
+        {tab === 'architecture' && <ArchitectureView />}
+
+        {tab === 'search' && (
+          <>
+            {state.status === 'error' && (
+              <div className="rounded-lg border border-clay-200 bg-clay-50 p-3 text-sm text-clay-700">
+                {state.error}
+                {state.error?.startsWith('503') && view !== 'fts' && (
+                  <button type="button" onClick={() => setView('fts')} className="ml-2 underline">
+                    přepnout na fulltext
+                  </button>
+                )}
+              </div>
+            )}
+
+            {state.status === 'idle' && (
+              <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-slate-500">
+                Zadejte dotaz nebo klikněte na některý z ukázkových. Režim „Porovnat“ ukáže stejný dotaz několika způsoby vedle sebe.
+              </div>
+            )}
+
+            {state.status !== 'idle' && state.status !== 'error' && (
+              <div className={state.status === 'loading' ? 'opacity-50 transition' : ''}>
+                {state.view === 'compare' && state.compare && <CompareView data={state.compare} filters={requestFilters} />}
+                {state.view !== 'compare' && state.single && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">
+                      {MODE_INFO[state.single.mode].label}: {state.single.hits.length} výsledků pro „{state.single.query}“
+                      {state.single.debug.fts_candidates != null && state.single.mode === 'hybrid' && (
+                        <>
+                          {' '}· kandidátů: vektor {state.single.debug.vector_candidates}, fulltext {state.single.debug.fts_candidates}
+                        </>
+                      )}
+                      {state.single.debug.rerank && (
+                        <>
+                          {' '}· {state.single.debug.rerank.passed} z {state.single.debug.rerank.candidates} kandidátů má známku aspoň{' '}
+                          {state.single.debug.rerank.min_grade}
+                        </>
+                      )}
+                    </p>
+                    <ResultList response={state.single} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <DebugPanel state={state} open={debugOpen} onToggle={setDebugOpen} />
+          </>
+        )}
+      </main>
     </div>
   )
 }
