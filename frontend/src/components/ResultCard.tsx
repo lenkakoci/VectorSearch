@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, FileText } from 'lucide-react'
 import { useState } from 'react'
 import { Highlight } from '../lib/highlight'
 import { api } from '../services/api'
@@ -72,7 +72,7 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
     <button
       type="button"
       onClick={() => toggle(key)}
-      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-brand-600')}
+      className={clsx('rounded px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-800', panel === key ? 'bg-slate-200 text-slate-900' : 'text-slate-500')}
     >
       {label}
     </button>
@@ -88,67 +88,35 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
       )}
     >
       <header className="flex items-start gap-2">
-        <span className="mt-0.5 w-6 shrink-0 text-right text-sm font-semibold text-slate-400">{position}.</span>
+        <span className="mt-0.5 w-5 shrink-0 text-right text-sm font-semibold text-slate-400">{position}.</span>
         {tag && (
           <span className={clsx('mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold', tag.className)} title="Stejný úryvek v jiném sloupci">
             {tag.letter}
           </span>
         )}
         <div className="min-w-0 flex-1">
-          <h3 className={clsx('font-semibold leading-snug text-slate-900', compact ? 'text-sm' : 'text-base')} title={hit.title ?? ''}>
+          <h3 className={clsx('font-semibold leading-snug text-brand-900', compact ? 'line-clamp-2 text-sm' : 'text-base')} title={hit.title ?? ''}>
             {hit.title ?? '(bez názvu)'}
           </h3>
-          <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
-            {grade != null && (
-              <span className={clsx('rounded-full px-2 py-0.5 font-semibold', GRADE_CLASS[grade] ?? GRADE_CLASS[0])} title="Známka od rerankeru">
-                známka {grade}/{MAX_GRADE}
-              </span>
-            )}
-            {foundBadges(hit, branches).map((badge) => (
-              <span key={badge.label} title={badge.title} className={clsx('rounded-full px-2 py-0.5 font-medium', badge.className)}>
-                {badge.label}
+          <div className={clsx('mt-1 flex flex-wrap items-center gap-x-1 text-slate-500', compact ? 'text-[11px]' : 'text-xs')}>
+            {sections.length === 0 && <span>bez sekce</span>}
+            {sections.map((part, index) => (
+              <span key={index} className="inline-flex items-center gap-1">
+                {index > 0 && <ChevronRight className="h-3 w-3 text-slate-300" />}
+                <span className={clsx(index === sections.length - 1 && 'font-medium text-slate-700')}>{part}</span>
               </span>
             ))}
-            {hit.content_kind === 'annex' && (
-              <span className={clsx('rounded-full px-2 py-0.5 font-medium uppercase', BADGE.annex)} title="Přílohová část zprávy (bez vektoru)">
-                příloha
-              </span>
+            {pages(hit) && (
+              <>
+                <span className="mx-1 text-slate-300">·</span>
+                <span className="font-medium text-slate-700">{pages(hit)}</span>
+              </>
             )}
           </div>
         </div>
       </header>
 
-      <div className={clsx('mt-2 flex flex-wrap items-center gap-x-1 text-slate-500', compact ? 'text-[11px]' : 'text-xs')}>
-        {sections.length === 0 && <span>bez sekce</span>}
-        {sections.map((part, index) => (
-          <span key={index} className="inline-flex items-center gap-1">
-            {index > 0 && <ChevronRight className="h-3 w-3 text-slate-300" />}
-            <span className={clsx(index === sections.length - 1 && 'font-medium text-slate-700')}>{part}</span>
-          </span>
-        ))}
-        <span className="mx-1 text-slate-300">·</span>
-        {pages(hit) && <span>{pages(hit)}</span>}
-        {pages(hit) && <span className="mx-1 text-slate-300">·</span>}
-        <span className="font-mono">chunk #{hit.chunk_index}</span>
-      </div>
-
-      <div className="mt-2 flex items-center gap-2 text-xs">
-        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100" title={`${MODE_INFO[mode].scoreLabel} (lišta je relativní k nejlepšímu výsledku)`}>
-          <div className="h-full rounded-full bg-brand-500" style={{ width: `${percent}%` }} />
-        </div>
-        <span className="w-20 text-right font-mono text-slate-600" title={MODE_INFO[mode].scoreLabel}>
-          {formatModeScore(hit, mode)}
-        </span>
-      </div>
-
-      {hit.rerank_reason && grade != null && (
-        <p className={clsx('mt-2 italic text-slate-600', compact ? 'text-xs' : 'text-sm')}>
-          Reranker: „{hit.rerank_reason}“
-          {hit.candidate_rank != null && <span className="not-italic text-slate-400"> · kandidát {hit.candidate_rank}.</span>}
-        </p>
-      )}
-
-      <p className={clsx('mt-2 text-slate-700', compact ? 'text-xs' : 'text-sm', panel !== 'full' && (compact ? 'line-clamp-4' : 'line-clamp-3'))}>
+      <p className={clsx('mt-2 text-slate-700', compact ? 'text-xs leading-relaxed' : 'text-sm', panel !== 'full' && (compact ? 'line-clamp-4' : 'line-clamp-3'))}>
         {panel === 'full' ? (
           <span className="whitespace-pre-wrap">{hit.chunk_raw}</span>
         ) : hit.headline ? (
@@ -158,22 +126,59 @@ export function ResultCard({ hit, mode, branches, fetch, maxScore, position, com
         )}
       </p>
 
+      {hit.rerank_reason && grade != null && (
+        <p className={clsx('mt-2 border-l-2 border-leaf-300 pl-2 italic text-slate-600', compact ? 'text-xs' : 'text-sm')}>
+          „{hit.rerank_reason}“
+          {hit.candidate_rank != null && <span className="not-italic text-slate-400"> · kandidát {hit.candidate_rank}.</span>}
+        </p>
+      )}
+
       {!compact && metadata.length > 0 && <p className="mt-2 text-xs text-slate-500">{metadata.join(' · ')}</p>}
 
-      <div className="mt-2 flex flex-wrap gap-1 text-xs">
-        {action(panel === 'full' ? 'Skrýt celý text' : 'Celý text', 'full')}
-        {action('Kontext ±1', 'context')}
-        {action('O dokumentu', 'document')}
-        {action('Proč nalezeno', 'why')}
+      <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px]">
+        {grade != null && (
+          <span className={clsx('rounded-full px-2 py-0.5 font-semibold', GRADE_CLASS[grade] ?? GRADE_CLASS[0])} title="Známka od rerankeru">
+            známka {grade}/{MAX_GRADE}
+          </span>
+        )}
+        {foundBadges(hit, branches).map((badge) => (
+          <span key={badge.label} title={badge.title} className={clsx('rounded-full px-2 py-0.5 font-medium', badge.className)}>
+            {badge.label}
+          </span>
+        ))}
+        {hit.content_kind === 'annex' && (
+          <span className={clsx('rounded-full px-2 py-0.5 font-medium uppercase', BADGE.annex)} title="Přílohová část zprávy (bez vektoru)">
+            příloha
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2 pl-2">
+          <span className="font-mono text-[10px] text-slate-400" title="Pořadí úryvku v dokumentu">
+            chunk #{hit.chunk_index}
+          </span>
+          <span className="h-1 w-16 overflow-hidden rounded-full bg-slate-100" title={`${MODE_INFO[mode].scoreLabel} (lišta je relativní k nejlepšímu výsledku)`}>
+            <span className="block h-full rounded-full bg-brand-500" style={{ width: `${percent}%` }} />
+          </span>
+          <span className="font-mono text-slate-600" title={MODE_INFO[mode].scoreLabel}>
+            {formatModeScore(hit, mode)}
+          </span>
+        </span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
         <a
           href={api.pdfUrl(hit.document_id, hit.page_from)}
           target="_blank"
           rel="noreferrer"
-          className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium text-brand-600 hover:bg-brand-50"
           title="Otevře zdrojové PDF na straně tohoto úryvku"
         >
+          <FileText className="h-3.5 w-3.5" />
           {hit.page_from ? `PDF, s. ${hit.page_from}` : 'PDF'}
         </a>
+        {action(panel === 'full' ? 'Skrýt celý text' : 'Celý text', 'full')}
+        {action('Kontext ±1', 'context')}
+        {action('O dokumentu', 'document')}
+        {action('Proč nalezeno', 'why')}
       </div>
 
       {panel === 'context' && (

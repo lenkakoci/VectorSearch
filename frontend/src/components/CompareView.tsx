@@ -1,4 +1,5 @@
 import clsx from 'clsx'
+import { Info } from 'lucide-react'
 import { useMemo } from 'react'
 import { COMPARE_MODES, MODE_INFO, MODES } from '../lib/modes'
 import { TAG_PALETTE } from '../lib/tone'
@@ -92,19 +93,24 @@ export function CompareView({ data, filters }: Props) {
           const gate = response.debug.rerank
           return (
             <section key={mode} className="min-w-0">
-              <header className="mb-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <h2 className="flex items-baseline gap-2 font-semibold text-slate-800">
+              <header className="sticky top-0 z-10 mb-2 rounded-lg border border-slate-200 border-t-4 border-t-brand-700 bg-white px-3 py-2 shadow-sm">
+                <h2 className="flex items-center gap-2 font-semibold text-brand-900">
                   {MODE_INFO[mode].label}
-                  <span className="text-xs font-normal text-slate-400">{MODE_INFO[mode].short}</span>
+                  <span title={MODE_INFO[mode].explain} className="cursor-help text-slate-400 hover:text-brand-500">
+                    <Info className="h-4 w-4" aria-label={MODE_INFO[mode].explain} />
+                  </span>
                   <span className="ml-auto text-xs font-normal text-slate-500">{response.hits.length} výsledků</span>
                 </h2>
-                <p className="mt-1 text-xs text-slate-500">{MODE_INFO[mode].explain}</p>
-                {gate && (
-                  <p className="mt-1 text-xs font-medium text-slate-700">
-                    {gate.passed} z {gate.candidates} kandidátů má známku aspoň {gate.min_grade}.
-                  </p>
-                )}
-                {timing(response) && <p className="mt-1 text-[11px] text-slate-400">{timing(response)}</p>}
+                <p className="mt-0.5 truncate text-[11px] text-slate-400" title={timing(response)}>
+                  {gate ? (
+                    <span className="font-medium text-leaf-700">
+                      {gate.passed} z {gate.candidates} kandidátů má známku aspoň {gate.min_grade}.
+                    </span>
+                  ) : (
+                    MODE_INFO[mode].short
+                  )}
+                  {timing(response) && <> · {timing(response)}</>}
+                </p>
               </header>
               <ResultList response={response} compact tags={tags} emptyReason={emptyReason(mode, response, filters)} />
             </section>

@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { ChevronRight, Quote } from 'lucide-react'
+import { ChevronRight, FileText, Quote } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { anchorOf, pagesOf, ROLE_INFO } from '../lib/answers'
 import { QuoteHighlight } from '../lib/highlight'
@@ -43,7 +43,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
     <button
       type="button"
       onClick={() => toggle(key)}
-      className={clsx('rounded px-2 py-0.5 hover:bg-slate-100', panel === key ? 'bg-slate-200 text-slate-900' : 'text-brand-600')}
+      className={clsx('rounded px-1.5 py-0.5 hover:bg-slate-100 hover:text-slate-800', panel === key ? 'bg-slate-200 text-slate-900' : 'text-slate-500')}
     >
       {label}
     </button>
@@ -68,7 +68,7 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
           {source.id}
         </span>
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold leading-snug text-slate-900" title={source.title ?? ''}>
+          <h3 className="text-sm font-semibold leading-snug text-brand-900" title={source.title ?? ''}>
             {source.title ?? '(bez názvu)'}
           </h3>
           <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
@@ -114,8 +114,6 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
             <span>{pagesOf(source)}</span>
           </>
         )}
-        <span className="mx-1 text-slate-300">·</span>
-        <span className="font-mono">chunk #{source.chunk_index}</span>
       </div>
 
       <p className={clsx('mt-2 text-sm text-slate-700', !open && 'line-clamp-2')}>
@@ -130,21 +128,27 @@ function SourceCard({ source, highlight }: { source: AnswerSource; highlight: Hi
 
       {open && metadata.length > 0 && <p className="mt-2 text-xs text-slate-500">{metadata.join(' · ')}</p>}
 
-      <div className="mt-2 flex flex-wrap gap-1 text-xs">
-        <button type="button" onClick={() => setOpen((value) => !value)} className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100">
-          {open ? 'Sbalit' : 'Celý text'}
-        </button>
-        {action('Kontext ±1', 'context')}
-        {action('O dokumentu', 'document')}
+      <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 text-xs">
         <a
           href={api.pdfUrl(source.document_id, source.page_from)}
           target="_blank"
           rel="noreferrer"
-          className="rounded px-2 py-0.5 text-brand-600 hover:bg-slate-100"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium text-brand-600 hover:bg-brand-50"
           title="Otevře zdrojové PDF na straně, kterou citace uvádí"
         >
+          <FileText className="h-3.5 w-3.5" />
           {source.page_from ? `PDF, s. ${source.page_from}` : 'PDF'}
         </a>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        >
+          {open ? 'Sbalit' : 'Celý text'}
+        </button>
+        {action('Kontext ±1', 'context')}
+        {action('O dokumentu', 'document')}
+        <span className="ml-auto font-mono text-[10px] text-slate-400">chunk #{source.chunk_index}</span>
       </div>
 
       {panel === 'context' && (
