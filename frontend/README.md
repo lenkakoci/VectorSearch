@@ -13,19 +13,31 @@ Jinou adresu API nastavíte proměnnou `VITE_API_URL` (dev proxy) nebo `VITE_API
 
 Stránka má tři záložky: **Vyhledávání** (pasáže) a **Zeptat se dokumentů**
 (odpověď s citacemi) sdílejí filtry; **Architektura** je samostatná statická
-stránka bez filtrů a bez volání API.
+stránka bez filtrů a bez volání API. Záložky jsou v tmavé hlavičce, vpravo
+v ní velikost korpusu.
+
+Vzhled přebírá barvy a písmo webu České geologické služby (cgs.gov.cz):
+navy a modrá pro strukturu a akce, zelená jen pro relevantní a ověřené,
+světlé odstíny geologické mapy pro štítky (písková = slova, modrá = význam,
+zelená = obojí, lososová = chyba nebo placené volání). Paleta je
+v `tailwind.config.js`, význam barev v `src/lib/tone.ts`; písmo Roboto je
+přibalené přes `@fontsource`, stránka nepotřebuje CDN.
 
 ## Vyhledávání
 
 - Pole „Co hledáte?“ s ukázkovými dotazy a inline prefixy (`autor:Poul …`).
-- Přepínač Fulltext / Sémantické / Hybridní / Porovnat. „Porovnat“ spustí jeden
-  dotaz ve všech třech režimech vedle sebe; stejný úryvek dostane stejné písmeno.
-- Panel „Upřesnit hledání“: autor, organizace, obec, klient, typ, dokument
+- Přepínač Porovnat / Fulltext / Sémantické / Hybridní / Reranking. „Porovnat“
+  spustí jeden dotaz ve všech režimech vedle sebe; stejný úryvek dostane stejné
+  písmeno. Hlavičky sloupců drží při scrollu nahoře, vysvětlení je v ⓘ.
+- Tlačítko „Nastavení“: počet výsledků a sloupec s rerankingem.
+- Tlačítko „Filtry“ otevře panel „Upřesnit hledání“: autor, organizace, obec, klient, typ, dokument
   (multiselect s počty), období (roky), část zprávy (tělo / přílohy). Každý filtr
   lze vypnout, aniž by se ztratil výběr.
-- Karta výsledku: název, odznaky (slova / význam / obojí, příloha), cesta sekce,
-  strana, skóre, úryvek se zvýrazněnými slovy (`ts_headline`, tedy i skloněné
-  tvary), celý text, kontext ±1 chunk, metadata dokumentu, rozpis skóre.
+- Karta výsledku, v pořadí čtení: název dokumentu, cesta sekce a strana, úryvek
+  se zvýrazněnými slovy (`ts_headline`, tedy i skloněné tvary); pod ním jeden
+  tichý řádek se známkou, odznaky (slova / význam / obojí, příloha), chunkem
+  a skóre. Akce: „PDF, s. X“ (zvýrazněná), celý text, kontext ±1 chunk,
+  metadata dokumentu, rozpis skóre.
 - Sbalený panel „Expert / debug“: požadavek, lexémy `tsquery`, SQL filtrů, časy,
   počty kandidátů, tabulka pořadí a skóre.
 
@@ -46,7 +58,7 @@ stránka bez filtrů a bez volání API.
 - Průběh odpovědi: dokud se odpovídá, vypisují se kroky tak, jak je server
   hlásí přes server-sent events (`POST /api/answer/stream`). Bez streamování
   se stránka vrátí k obyčejnému `POST /api/answer`.
-- Nastavení: počet zdrojů, minimální známka, sousední úryvky a „nová odpověď".
+- Tlačítko „Pokročilé“: počet zdrojů, minimální známka, sousední úryvky a „nová odpověď".
   Změna filtrů odpověď nepřegeneruje, protože každá odpověď stojí volání modelu.
 - Odznak „z cache" u odpovědi, kterou server vzal z uložených; expert panel
   u ní říká, že se model nevolal.
@@ -74,13 +86,14 @@ Celá pipeline na jedné obrazovce, pro prezentaci a vysvětlení kolegům.
 | cesta | obsah |
 | --- | --- |
 | `src/App.tsx` | stav stránky, kompozice |
-| `src/components/` | SearchBar, ModeSwitch, FilterPanel, MultiSelect, ActiveFilters, ResultList, ResultCard, ScoreBreakdown, ContextView, DocumentInfo, CompareView, DebugPanel |
+| `src/components/` | SearchBar, ModeSwitch, Options, EmptyState, FilterPanel, MultiSelect, ActiveFilters, ResultList, ResultCard, ScoreBreakdown, ContextView, DocumentInfo, CompareView, DebugPanel |
 | `src/components/` (odpovědi) | AskView, AnswerCard, AnswerProgress, SourceList, PipelineTrace |
 | `src/components/` (architektura) | ArchitectureView, PipelineMap, StepDetail |
 | `src/hooks/` | useSearch, useAnswer |
 | `src/lib/modes.ts` | popisy režimů laicky, ukázkové dotazy |
 | `src/lib/answers.ts` | stavy odpovědi, popisy kontrol a rolí, ukázkové otázky |
 | `src/lib/architecture.ts` | data záložky Architektura: kroky, fáze, témata napříč |
+| `src/lib/tone.ts` | co která barva znamená: známky, odznaky metod, písmena v porovnání |
 | `src/lib/filters.ts` | stav filtrů a jeho převod na tělo požadavku |
 | `src/lib/highlight.tsx` | vykreslení `<mark>` z `ts_headline` bez `innerHTML`, a dohledání citátu ve zdroji |
 | `src/test/` | render testy nad odpověďmi zachycenými z API |
