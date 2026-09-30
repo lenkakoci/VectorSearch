@@ -41,6 +41,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 from google import genai
 from google.genai import types
@@ -144,6 +145,56 @@ def pdf_pages(path: Path) -> list[str]:
     return pages
 
 
+def _pages_for(path: Path, *, force: bool) -> list[str]:
+    """Return the page text of ``path``, from the cached page map when there is one.
+
+    A source report does not change - these are submitted surveys, not living
+    documents - so a page map that exists *is* the text of that PDF and there is
+    nothing to re-derive. Reading it back is not only cheaper, it is the only way
+    to get the same answer twice: pdfminer's layout analysis iterates over a set
+    of text objects whose hash is their address in memory, so a second run in a
+    second process returns a nearly identical page with one stray glyph on the
+    other side of a blank line. Measured over six runs of one report, three
+    agreed and three did not, and ``PYTHONHASHSEED`` does not control it.
+
+    That is enough to fail the byte comparison in ``process_one``, which then
+    declares the document stale and charges a re-extraction and a re-embedding
+    for a glyph that moved. Six documents in the database were invalidated that
+    way, their sections identical and 23 of 1715 chunks differing.
+
+    To force a fresh parse anyway: delete ``<stem>.pages.json`` (``processed/``
+    is a cache and regenerating it is expected) or pass --force.
+    """
+    if force:
+        return pdf_pages(path)
+
+    cached = MARKDOWN_DIR / f"{path.stem}.pages.json"
+    if cached.exists():
+        try:
+            pages = json.loads(cached.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            # A run killed mid-write leaves a truncated file; parse it again.
+            logger.warning("Page map for %s is corrupt; re-reading the PDF", path.name)
+        else:
+            if isinstance(pages, list) and pages:
+                logger.debug("Reusing the cached page map for %s", path.name)
+                return pages
+
+    return pdf_pages(path)
+
+
+def _source_sha(path: Path, entry: dict[str, Any]) -> str:
+    """Return the source digest, preferring the one the manifest already recorded.
+
+    The digest is provenance - it ends up in ``documents.source_sha256`` - and no
+    longer a change detector, because the source PDFs do not change. A recorded
+    digest is therefore still the digest, which keeps a full read of every PDF
+    out of every run.
+    """
+    recorded = entry.get("sha256")
+    return recorded if isinstance(recorded, str) and recorded else file_sha256(path)
+
+
 def to_markdown(
     path: Path, pages: list[str]
 ) -> tuple[str, NormalizationStats | None, list[str]]:
@@ -211,20 +262,19 @@ def process_one(
 ) -> bool:
     """Convert and extract a single report. Returns True when work was done."""
     key = source_key(path)
-    sha = file_sha256(path)
     entry = manifest.get(key)
 
     markdown_path = MARKDOWN_DIR / f"{path.stem}.md"
     needs_markdown = (
         force
-        or entry.get("sha256") != sha
         or entry.get("markdown_version") != MARKDOWN_VERSION
         or not markdown_path.exists()
     )
 
     if needs_markdown:
         logger.info("Converting %s to Markdown", path.name)
-        pages = pdf_pages(path)
+        sha = _source_sha(path, entry)
+        pages = _pages_for(path, force=force)
         markdown, stats, page_kinds = to_markdown(path, pages)
         if not markdown.strip():
             if pages and not any(page.strip() for page in pages):
@@ -298,7 +348,7 @@ def process_one(
     payload = {
         "document_id": document_id,
         "source_file": key,
-        "source_sha256": sha,
+        "source_sha256": _source_sha(path, manifest.get(key)),
         "markdown_path": markdown_path.relative_to(DATA_DIR).as_posix(),
         "extraction_schema_version": SCHEMA_VERSION,
         "extraction_model": model,

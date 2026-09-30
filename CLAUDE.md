@@ -166,6 +166,18 @@ neither configuration works alone.
 - **Verify after each paid batch, not at the end.** Two regressions (page
   attribution falling to 7-33%, stale `content_kind`) surfaced only in the checks
   and each meant re-embedding. Run `check_pipeline.py` before the next batch.
+- **pdfminer does not return the same text twice.** Its layout analysis iterates
+  over a set of text objects whose hash is their address in memory, so a second
+  process gets a nearly identical page with one stray glyph on the other side of
+  a blank line. Six runs over one report: three agreed, three did not, and
+  `PYTHONHASHSEED` does not control it. That is enough to fail the byte
+  comparison in `extract_reports.process_one`, which then invalidates extraction
+  and chunks - six documents in the database were charged a re-extraction and a
+  re-embedding for a glyph that moved, their sections identical and 23 of 1715
+  chunks differing. `_pages_for` therefore reads `<stem>.pages.json` back instead
+  of parsing again, which holds because a submitted survey does not change. Same
+  reason the manifest no longer watches the source digest. To force a fresh
+  parse, delete the page map or pass `--force`.
 - **Czech characters do not survive the shell.** A document list passed as
   arguments arrives as `Orli?ky`. Call `ingest.main([...])` from Python with names
   read from the manifest.

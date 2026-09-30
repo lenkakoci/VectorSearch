@@ -4,7 +4,6 @@ The manifest records, per source file, what has already been done and under
 which parameters. ``ingest.py`` diffs the manifest against the current
 configuration to decide which stages need to re-run:
 
-    source sha256 changed        -> everything, starting from PDF -> Markdown
     MARKDOWN_VERSION             -> markdown -> extract -> chunk -> embed -> import
     SCHEMA_VERSION or LLM model  -> extract -> chunk -> embed -> import
     chunk params or embed model  -> chunk -> embed -> import
@@ -13,6 +12,14 @@ configuration to decide which stages need to re-run:
 This is what makes "run it again whenever a new report arrives" cheap: a new
 report costs one extraction, and bumping SCHEMA_VERSION re-extracts everything
 from cached Markdown without re-parsing a single PDF.
+
+The source file itself is deliberately *not* watched. These are submitted
+surveys: a report that is in the corpus does not change afterwards, so a digest
+of it can only ever confirm what the manifest already says - at the price of
+reading every byte of every PDF on every run. The digest is still recorded, as
+provenance for ``documents.source_sha256``. The cost of the assumption is that
+a PDF replaced under the same file name goes unnoticed; delete its entry, or the
+files it produced, to reprocess it.
 """
 
 from __future__ import annotations
@@ -118,7 +125,6 @@ class Manifest:
     def stages_to_run(
         self,
         key: str,
-        sha256: str,
         config: PipelineConfig,
         outputs: dict[str, Path] | None = None,
     ) -> set[str]:
@@ -131,12 +137,11 @@ class Manifest:
         cache and deleting part of it to force a rebuild is a reasonable thing to
         do, but the timestamps alone cannot see that and would report the work as
         already done.
+
+        The source file is not compared; see the module docstring for why.
         """
         entry = self.get(key)
         if not entry:
-            return set(STAGES)
-
-        if entry.get("sha256") != sha256:
             return set(STAGES)
 
         stale_from: int | None = None

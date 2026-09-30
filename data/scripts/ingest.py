@@ -3,7 +3,6 @@
 Scans the input folders, diffs each file against the manifest, and runs only the
 stages that are actually stale:
 
-    source sha256 changed        -> everything, starting from PDF -> Markdown
     MARKDOWN_VERSION             -> markdown -> extract -> chunk -> embed -> import
     SCHEMA_VERSION or LLM model  -> extract -> chunk -> embed -> import
     chunk params or embed model  -> chunk -> embed -> import
@@ -30,7 +29,7 @@ from pathlib import Path
 import chunk_and_embed
 import extract_reports
 import import_reports
-from manifest import STAGES, Manifest, file_sha256
+from manifest import STAGES, Manifest
 from pipeline_common import (
     DATA_DIR,
     MANIFEST_PATH,
@@ -55,9 +54,7 @@ def build_plan(sources: list[Path], manifest: Manifest, settings, force: bool) -
         if force:
             plan[key] = set(STAGES)
             continue
-        pending = manifest.stages_to_run(
-            key, file_sha256(path), config, outputs=stage_outputs(key)
-        )
+        pending = manifest.stages_to_run(key, config, outputs=stage_outputs(key))
         if pending:
             plan[key] = pending
     return plan
