@@ -39,6 +39,7 @@ import psycopg2
 from injection_scan import scan_chunks, summarize
 from manifest import Manifest, timestamp_key
 from markdown_normalizer import MARKDOWN_VERSION, _signature
+from page_classifier import FORM
 from pipeline_common import (
     MANIFEST_PATH,
     MARKDOWN_DIR,
@@ -573,6 +574,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--removed", action="store_true",
         help="Print what the normaliser deleted from each document and why",
     )
+    parser.add_argument(
+        "--tables", action="store_true",
+        help="Print the tables each source PDF draws, and whether they sit in the annex",
+    )
     return parser.parse_args(argv)
 
 
@@ -606,6 +611,74 @@ def render_removed(stems: list[str]) -> None:
                 print(f"    … a dalších {len(group) - _REMOVED_SAMPLE} pravidel")
 
 
+def render_tables(manifest: Manifest, keys: list[str]) -> None:
+    """Print the tables each source PDF draws, and where they sit.
+
+    A table survives ``pdf_pages`` as a column of cells with nothing tying a value
+    to its heading, so the borehole table on Myslinka page 5 reaches a chunk as
+    ``Sonda / č. / Hloubka / …`` followed by a bare column of depths. Rebuilding
+    them would change the Markdown of most of the corpus, which is paid, so the
+    point of this report is the number that decides whether to: how many pages
+    hold a table, and how many of those are prose rather than a form.
+
+    That split is the whole question, and it is the page kind that decides it,
+    exactly as ``chunk_and_embed.content_kind`` does: a table on a form page
+    becomes an annex chunk with no vector, so rebuilding it can only ever help
+    full text, while a table on a prose page is embedded and reaches semantic
+    search and citations. "Prose page" is not the same as "in a chapter" - a
+    borehole documentation sheet is prose by every measure and still sits behind
+    the annex boundary - so the label says what it measures, which is the vector.
+    """
+    from table_detect import tables_in  # heavy import, only needed here
+
+    totals = Counter()
+    for key in keys:
+        entry = manifest.get(key)
+        source = entry.get("source_path")
+        if not source or not Path(source).exists() or Path(source).suffix.lower() != ".pdf":
+            continue
+        stem = Path(key).stem
+
+        kinds_path = MARKDOWN_DIR / f"{stem}.pagekind.json"
+        kinds = json.loads(kinds_path.read_text(encoding="utf-8")) if kinds_path.exists() else []
+
+        try:
+            reports = tables_in(Path(source))
+        except Exception as exc:  # noqa: BLE001 - report it rather than crash the run
+            print(f"\n{stem}  -  nelze přečíst: {type(exc).__name__}")
+            continue
+        if not reports:
+            continue
+
+        print()
+        print("=" * 78)
+        print(f"{stem}  -  {len(reports)} stran s tabulkou")
+        for report in reports:
+            kind = kinds[report.page - 1] if report.page <= len(kinds) else "?"
+            where = "FORMULÁŘ bez vektoru" if kind == FORM else "S VEKTOREM"
+            totals[where] += 1
+            head = ", ".join(report.header)[:52] if report.header else "bez hlavičky"
+            print(
+                f"  str. {report.page:>4}  {report.rows:>3} řádků x {report.columns:>2} sloupců"
+                f"  {where:<21} {head}"
+            )
+
+    print()
+    print("=" * 78)
+    embedded = totals["S VEKTOREM"]
+    annex = totals["FORMULÁŘ bez vektoru"]
+    print(
+        f"CELKEM {embedded + annex} stran s tabulkou: "
+        f"{embedded} na zaembeddovaných stranách, {annex} na formulářových"
+    )
+    print(
+        "Rozhodnutí o převodu tabulek se řídí prvním číslem: formulářová strana\n"
+        "nemá vektor, takže lepší převod tam pomůže jen fulltextu.\n"
+        "Hlavička je někdy převzatá chybně - je to řádek nad mřížkou, a ten jde\n"
+        "vypsaný právě proto, aby se to poznalo."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Returns 1 when any document failed a check."""
     configure_logging()
@@ -618,6 +691,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.removed:
         render_removed([Path(key).stem for key in keys])
+        return 0
+
+    if args.tables:
+        render_tables(manifest, keys)
         return 0
 
     unconverted = check_unconverted(settings, wanted)
