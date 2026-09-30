@@ -276,6 +276,41 @@ def content_kind(page_from: int | None, page_kinds: list[str]) -> str:
     return ANNEX if page_kinds[page_from - 1] == FORM else PROSE
 
 
+def cached_embeddings(
+    stem: str, entry: dict[str, Any], settings: Settings
+) -> dict[str, list[float]]:
+    """Return the vectors of the previous run, keyed by the text that produced them.
+
+    Re-chunking a document costs a full re-embedding today, even when the reason
+    it is being re-chunked touched one chunk. That is most of the bill for
+    nothing: six documents were re-embedded in full because pdfminer moved a
+    glyph, and only 23 of their 1715 chunks had changed at all.
+
+    Keyed on ``chunk_text``, the text that actually went to the model - context
+    prefix included - so a changed extraction changes the prefix and misses on
+    purpose. The map is empty unless the parquet was written with the same model
+    and dimensionality: a vector from another model is not this model's answer.
+    Annex rows carry no vector and are skipped.
+    """
+    config = settings.pipeline_config()
+    if (
+        entry.get("embedding_model") != config.embedding_model
+        or entry.get("embedding_dimensions") != config.embedding_dimensions
+    ):
+        return {}
+
+    path = CHUNKS_DIR / f"{stem}.parquet"
+    if not path.exists():
+        return {}
+
+    frame = pd.read_parquet(path, columns=["chunk_text", "embedding"])
+    return {
+        row.chunk_text: list(row.embedding)
+        for row in frame.itertuples()
+        if row.embedding is not None and len(row.embedding)
+    }
+
+
 def process_one(
     stem: str,
     key: str,
@@ -283,8 +318,14 @@ def process_one(
     settings: Settings,
     generator: EmbeddingsGenerator | None,
     manifest: Manifest,
+    reuse: bool = True,
 ) -> int:
-    """Chunk, embed and cache one document. Returns the chunk count."""
+    """Chunk, embed and cache one document. Returns the chunk count.
+
+    ``reuse`` serves a chunk whose text is unchanged from the previous parquet
+    instead of embedding it again. It is off under --force, where the point is to
+    distrust what is on disk.
+    """
     document_id, chunks, embed_texts, page_ranges, kinds = chunk_document(stem, settings)
     if not chunks:
         logger.warning("No chunks produced for %s", stem)
@@ -317,9 +358,27 @@ def process_one(
     # search to match and embedding them would be most of the bill. The vector
     # query already reads WHERE embedding IS NOT NULL.
     embedded = [index for index, kind in enumerate(kinds) if kind == PROSE]
+    known = cached_embeddings(stem, manifest.get(key), settings) if reuse else {}
+
     vectors: list[list[float] | None] = [None] * len(chunks)
-    for index, vector in zip(embedded, generator.embed([embed_texts[i] for i in embedded])):
-        vectors[index] = vector
+    todo = []
+    for index in embedded:
+        vector = known.get(embed_texts[index])
+        if vector is None:
+            todo.append(index)
+        else:
+            vectors[index] = vector
+
+    if known:
+        logger.info(
+            "  %d of %d chunks reused from the previous run, %d to embed",
+            len(embedded) - len(todo),
+            len(embedded),
+            len(todo),
+        )
+    if todo:
+        for index, vector in zip(todo, generator.embed([embed_texts[i] for i in todo])):
+            vectors[index] = vector
 
     rows = [
         {
@@ -435,7 +494,12 @@ def main(argv: list[str] | None = None) -> int:
     for stem, key in targets:
         try:
             total_chunks += process_one(
-                stem, key, settings=settings, generator=generator, manifest=manifest
+                stem,
+                key,
+                settings=settings,
+                generator=generator,
+                manifest=manifest,
+                reuse=not args.force,
             )
         except Exception as exc:  # noqa: BLE001 - one bad document must not stop the batch
             failed += 1
