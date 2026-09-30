@@ -178,6 +178,16 @@ neither configuration works alone.
   of parsing again, which holds because a submitted survey does not change. Same
   reason the manifest no longer watches the source digest. To force a fresh
   parse, delete the page map or pass `--force`.
+- **Re-extraction is not reproducible, and it re-embeds the corpus.** At
+  `temperature=0.0` Gemini still rewrote a whole `summary` on a second pass over
+  identical Markdown - same facts, different sentences. `build_context_prefix`
+  puts `title`, `locality`, `report_type` and that summary in front of every
+  chunk, so a changed summary changes every `chunk_text` in the document and the
+  embedding reuse in `chunk_and_embed.cached_embeddings` misses all of them. One
+  extraction therefore costs that document's full re-embedding, by construction.
+  Budget a `SCHEMA_VERSION` bump as re-extract *and* re-embed everything, never
+  re-extract alone. Measured: the six documents settled after the pdfminer churn
+  came to 704 embedded chunks of 1715.
 - **Czech characters do not survive the shell.** A document list passed as
   arguments arrives as `Orli?ky`. Call `ingest.main([...])` from Python with names
   read from the manifest.
