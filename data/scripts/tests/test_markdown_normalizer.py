@@ -7,7 +7,7 @@ comes out looks perfectly well formed either way.
 
 from __future__ import annotations
 
-from markdown_normalizer import _signature, normalize_markdown
+from markdown_normalizer import _heuristic_headings, _signature, normalize_markdown
 
 
 def _document(furniture_repeats: int) -> str:
@@ -96,3 +96,88 @@ def test_a_column_of_measurements_is_not_a_running_header():
     assert _signature("Objednatel:") is not None
     assert _signature("Dokument č.") is not None
     assert _signature("GEOLOGICKY PRUZKUM ZAHLAVI") is not None
+
+
+def _prose(marker: str) -> list[str]:
+    """Return a paragraph long enough to separate two headings."""
+    return [
+        f"Vrtne prace {marker} byly provedeny jadrovym vrtanim v obdobi od brezna.",
+        f"Zastizene zeminy {marker} byly zatrideny podle platne normy.",
+        f"Hladina podzemni vody {marker} byla narazena v hloubce tri metry.",
+        "",
+    ]
+
+
+def test_a_contents_page_without_dot_leaders_does_not_become_the_headings():
+    """The outline that wins has to be the one with the report under it.
+
+    A contents page whose entries carry no dot leaders is invisible to
+    _extract_toc, so it reaches the heuristic as a flawless outline, sits first
+    and used to win on the tie. Mladá Boleslav went through with its six body
+    headings unmarked, five empty sections and "6. Závěr" spanning 788 lines.
+    """
+    lines = [
+        "OBSAH",
+        "1. Uvod",
+        "2. Metodika pruzkumu",
+        "3. Zaver",
+        "",
+        "1. Uvod",
+        *_prose("uvodu"),
+        "2. Metodika pruzkumu",
+        *_prose("metodiky"),
+        "3. Zaver",
+        *_prose("zaveru"),
+    ]
+
+    headings = _heuristic_headings(lines)
+
+    assert headings == {5, 10, 15}, "the body chain, not the contents page"
+
+
+def test_a_chain_seeded_on_an_annex_list_loses_to_the_body():
+    """Equal length has to go to the later start.
+
+    Čejetice lists "1. Dokumentace sond" and "2. Situace sond" above the report
+    and then carries on into the real chapters, so that chain is as long as the
+    body's and spread out just as far - the gap filter cannot tell them apart.
+    """
+    lines = [
+        "1. Dokumentace sond",
+        "2. Situace sond",
+        "",
+        "1. Uvod",
+        *_prose("uvodu"),
+        "2. Prirodni pomery",
+        *_prose("pomeru"),
+        "3. Zaver",
+        *_prose("zaveru"),
+    ]
+
+    headings = _heuristic_headings(lines)
+
+    assert headings == {3, 8, 13}, "the chapters, not the list of annexes"
+
+
+def test_a_chapter_numbered_1_1_is_still_a_chapter():
+    """Some reports number their chapters 1.1, 1.2, 1.3 and never write a bare 1.
+
+    Without a chain seeded at 1.1 the only outline ZZ_Opava - Zimní stadion
+    offered was its annex list, and the annex list won. The chain may not then
+    drop back to depth one, or it runs on into that same list.
+    """
+    lines = [
+        "1.1 UVOD A ROZSAH REALIZOVANYCH PRACI",
+        *_prose("uvodu"),
+        "1.2 VYHODNOCENI PRACI",
+        *_prose("vyhodnoceni"),
+        "1.3 ZAVER",
+        *_prose("zaveru"),
+        "2. Podrobna situace zajmove lokality",
+        "3. Geologicke profily sond",
+        "4. Zprava vrtnych praci",
+    ]
+
+    headings = _heuristic_headings(lines)
+
+    assert headings == {0, 5, 10}, "the three chapters, none of the annex list"

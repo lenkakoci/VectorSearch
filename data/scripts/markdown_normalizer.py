@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 6
+MARKDOWN_VERSION = 7
 
 # The heading the annex is filed under. Without one it inherits the last
 # chapter's label, which is how 130 of 216 chunks in one report came to be cited
@@ -71,6 +71,15 @@ _FURNITURE_MIN_SIGNATURE = 3
 # Guard rails for the no-table-of-contents fallback.
 _HEURISTIC_MAX_LENGTH = 90
 _HEURISTIC_MIN_HEADINGS = 3
+# A heading has prose under it; a list entry has the next entry. A contents page
+# whose entries carry no dot leaders is invisible to _extract_toc, so it reaches
+# the heuristic as a perfect outline - and wins, because it is an outline. Three
+# reports were cited entirely out of their own contents page this way, the body
+# headings left unmarked and five of six sections empty. Measured on those: the
+# median gap of a contents or annex list is 1-2 lines, of a real outline 21-103.
+# Span does not separate them - one list reaches line 579 by catching a "5 - 6"
+# in a table - but the median does.
+_HEURISTIC_MIN_MEDIAN_GAP = 5
 
 # How far below a heading to look for the section number pdfminer detached from it.
 _ORPHAN_SEARCH_LINES = 3
@@ -366,13 +375,39 @@ def _heading_prefix(number: str, line: str) -> str:
     return f"{'#' * depth} {' '.join(line.split())}"
 
 
+def _median_gap(chain: list[int]) -> float:
+    """Return the median number of lines between consecutive entries.
+
+    A chain too short to have a gap is not evidence of a list, so it is reported
+    as infinitely spread and left to the minimum-headings check.
+    """
+    gaps = sorted(b - a for a, b in zip(chain, chain[1:]))
+    if not gaps:
+        return float("inf")
+    middle = len(gaps) // 2
+    if len(gaps) % 2:
+        return float(gaps[middle])
+    return (gaps[middle - 1] + gaps[middle]) / 2
+
+
 def _heuristic_headings(lines: list[str]) -> set[int]:
     """Find numbered headings in a report that has no table of contents.
 
     Annex and distribution lists look exactly like headings, which is what makes
     a naive rule fail, so a candidate only counts as part of an outline that
-    starts at 1 and stays continuous. The longest such chain wins - an annex list
-    restarts the numbering and therefore yields a shorter one.
+    starts at 1 and stays continuous.
+
+    Continuity alone is not enough, because a contents page is continuous by
+    construction and sits first: three reports whose contents page has no dot
+    leaders had it promoted to their headings, leaving the body unmarked. Chains
+    are therefore filtered by how far apart their entries sit - a list packs them
+    one or two lines apart, a real outline has prose in between - and among the
+    survivors the longest wins, with a later start beating an earlier one. That
+    last rule is what separates a chain seeded on an annex list and continuing
+    into the body from the body's own chain, which the gap filter cannot.
+
+    A chain may start at ``1.1`` as well as ``1.``, for the report that numbers
+    its chapters ``1.1``, ``1.2``, ``1.3`` and would otherwise offer nothing.
     """
     candidates: list[tuple[int, tuple[int, ...]]] = []
     for index, line in enumerate(lines):
@@ -392,15 +427,24 @@ def _heuristic_headings(lines: list[str]) -> set[int]:
 
     best: list[int] = []
     for start in range(len(candidates)):
-        if candidates[start][1] != (1,):
+        if candidates[start][1] not in {(1,), (1, 1)}:
             continue
         chain = [candidates[start][0]]
         previous = candidates[start][1]
+        # A chapter cannot be shallower than the first one. Without this the
+        # chain seeded on "1.1" of the report numbered 1.1/1.2/1.3 ran on into
+        # its annex list, taking "2. Podrobná situace" and two more as chapters
+        # with nothing under them.
+        depth = len(previous)
         for index, number in candidates[start + 1 :]:
-            if _follows(previous, number):
+            if len(number) >= depth and _follows(previous, number):
                 chain.append(index)
                 previous = number
-        if len(chain) > len(best):
+        if _median_gap(chain) < _HEURISTIC_MIN_MEDIAN_GAP:
+            continue
+        # Equal length means a later start wins, so a chain seeded on a list
+        # above the body loses to the body's own.
+        if len(chain) >= len(best):
             best = chain
 
     return set(best) if len(best) >= _HEURISTIC_MIN_HEADINGS else set()
