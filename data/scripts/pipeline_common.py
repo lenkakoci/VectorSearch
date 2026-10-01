@@ -201,6 +201,33 @@ def resolve_sources(
     return resolved
 
 
+_SOURCE_SUFFIXES = (".pdf", ".md", ".markdown")
+
+
+def wanted_stems(items: list[str]) -> set[str]:
+    """Turn ``--only`` arguments into the stems the manifest is keyed by.
+
+    Accepts a path, a file name or the bare stem, like ``resolve_sources``, but
+    without needing the source file to still be on disk - the stage scripts work
+    from the manifest alone.
+
+    ``Path(item).stem`` cannot do this, which is the bug this replaces: a bare
+    stem has no suffix to strip, so for a report named "ZZ_V.P. - IGP, HGP_final"
+    it returns "ZZ_V.P" and the document matches nothing. It was extracted, then
+    silently dropped by both the chunking and the import stage, and the run still
+    exited 0. Every report with a dot in its name was affected.
+    """
+    stems = set()
+    for item in items:
+        name = Path(item).name
+        for suffix in _SOURCE_SUFFIXES:
+            if name.lower().endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        stems.add(name)
+    return stems
+
+
 def source_key(path: Path) -> str:
     """Return the manifest key for a source file.
 

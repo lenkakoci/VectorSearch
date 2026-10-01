@@ -37,6 +37,7 @@ from pipeline_common import (
     MANIFEST_PATH,
     configure_logging,
     load_connection_params,
+    wanted_stems,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Stem match, so Roudno, Roudno.pdf and PDFs/Roudno.pdf all select the same
     # document whichever pipeline script the argument is given to.
-    wanted = {Path(item).stem for item in args.only} if args.only else None
+    wanted = wanted_stems(args.only) if args.only else None
 
     targets: list[tuple[str, str]] = []
     for key in manifest.keys():

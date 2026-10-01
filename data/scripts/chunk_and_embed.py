@@ -62,6 +62,7 @@ from pipeline_common import (
     configure_logging,
     ensure_dirs,
     load_settings,
+    wanted_stems,
 )
 
 logger = logging.getLogger(__name__)
@@ -455,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     # Match on the stem so that Roudno, Roudno.pdf and PDFs/Roudno.pdf all work -
     # the source scripts take a file, this one takes a stem, and having to
     # remember which is which was a trap.
-    wanted = {Path(item).stem for item in args.only} if args.only else None
+    wanted = wanted_stems(args.only) if args.only else None
 
     targets: list[tuple[str, str]] = []
     not_extracted = 0
