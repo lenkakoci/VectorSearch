@@ -36,6 +36,7 @@ from typing import Any
 import pandas as pd
 import psycopg2
 
+from chunker import chunk_markdown
 from injection_scan import scan_chunks, summarize
 from manifest import Manifest, timestamp_key
 from markdown_normalizer import MARKDOWN_VERSION, _extract_toc, _signature
@@ -174,6 +175,52 @@ def _outline_coverage(lines: list[str], pages: list[str]) -> Check | None:
     if share > _OUTLINE_COVERAGE_WARN:
         return Check("pokrytí obsahu", WARN, detail)
     return Check("pokrytí obsahu", OK, detail)
+
+
+def _chunks_match_markdown(stem: str, settings: Settings, frame: pd.DataFrame) -> Check:
+    """Chunk the Markdown again and compare the result with the stored parquet.
+
+    Everything else about chunking is read out of the parquet, which only ever
+    says whether the parquet is consistent with itself. This is the one check
+    that answers the question the project's own rule asks - recompute, do not
+    trust a clean exit - and it closes a real hole: ``--markdown-only`` rewrites
+    the Markdown but returns before the lines that mark extraction and chunks
+    stale, so a Markdown that changed leaves the parquet and the database holding
+    chunks of text that no longer exists, with the manifest calling them current.
+
+    Compared against ``chunk_raw``, which is ``Chunk.text`` as the chunker
+    produced it, heading prefix included. The embedded text is not comparable
+    here: it carries the document summary from an extraction this does not re-run.
+    """
+    markdown_path = MARKDOWN_DIR / f"{stem}.md"
+    if not markdown_path.exists():
+        return Check("shoda s markdownem", WARN, f"chybí {markdown_path.name}")
+    if "chunk_raw" not in frame:
+        return Check("shoda s markdownem", WARN, "parquet neobsahuje chunk_raw")
+
+    rebuilt = chunk_markdown(
+        markdown_path.read_text(encoding="utf-8"),
+        max_tokens=settings.chunk_max_tokens,
+        overlap=settings.chunk_overlap_tokens,
+        min_tokens=settings.chunk_min_tokens,
+    )
+    stored = frame["chunk_raw"].tolist()
+    if len(rebuilt) != len(stored):
+        return Check(
+            "shoda s markdownem",
+            FAIL,
+            f"markdown dává {len(rebuilt)} chunků, parquet má {len(stored)}"
+            " - markdown se změnil, nebo se změnily parametry chunkování",
+        )
+
+    differing = sum(1 for chunk, text in zip(rebuilt, stored) if chunk.text != text)
+    if differing:
+        return Check(
+            "shoda s markdownem",
+            FAIL,
+            f"{differing}/{len(stored)} chunků má jiný text než markdown",
+        )
+    return Check("shoda s markdownem", OK, f"{len(stored)} chunků odpovídá markdownu")
 
 
 def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> list[Check]:
@@ -315,6 +362,8 @@ def check_chunks(
         checks.append(
             Check("velikost chunků", WARN, f"největší má {int(tokens.max())} tokenů, limit modelu je ~2048")
         )
+
+    checks.append(_chunks_match_markdown(stem, settings, frame))
 
     with_section = int(frame["section"].notna().sum())
     checks.append(
