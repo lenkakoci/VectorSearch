@@ -45,7 +45,6 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage
@@ -61,6 +60,7 @@ from tenacity import (
 from manifest import Manifest, file_sha256, timestamp_key, utc_now
 from markdown_normalizer import MARKDOWN_VERSION, NormalizationStats, normalize_markdown
 from page_classifier import FORM, classify_pages
+from pdf_overprint import OverprintTextConverter
 from pipeline_common import (
     DATA_DIR,
     EXTRACTED_DIR,
@@ -129,19 +129,27 @@ def pdf_pages(path: Path) -> list[str]:
     ``pdfminer.high_level.extract_text(page_numbers=[i])`` per page, which
     re-parses the whole document each time. Output is byte-identical; it is
     about twice as fast on an 18-page report and the gap widens with length.
+
+    ``OverprintTextConverter`` keeps one impression of a glyph a report paints
+    twice to fake bold; see ``pdf_overprint``. On a report that does not
+    overprint it suppresses nothing and the text is what plain pdfminer returns.
     """
     if path.suffix.lower() != ".pdf":
         return []
 
     pages: list[str] = []
+    suppressed = 0
     with path.open("rb") as handle:
         manager = PDFResourceManager()
         for page in PDFPage.get_pages(handle):
             buffer = io.StringIO()
-            device = TextConverter(manager, buffer, laparams=LAParams())
+            device = OverprintTextConverter(manager, buffer, laparams=LAParams())
             PDFPageInterpreter(manager, device).process_page(page)
             device.close()
+            suppressed += device.suppressed
             pages.append(buffer.getvalue())
+    if suppressed:
+        logger.info("  %s: dropped %d overprinted glyphs", path.name, suppressed)
     return pages
 
 
