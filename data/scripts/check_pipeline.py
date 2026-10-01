@@ -38,7 +38,7 @@ import psycopg2
 
 from injection_scan import scan_chunks, summarize
 from manifest import Manifest, timestamp_key
-from markdown_normalizer import MARKDOWN_VERSION, _signature
+from markdown_normalizer import MARKDOWN_VERSION, _extract_toc, _signature
 from page_classifier import FORM
 from pipeline_common import (
     MANIFEST_PATH,
@@ -85,8 +85,21 @@ _SECTION_DOMINANCE_MIN_CHUNKS = 10
 # signatures; the top few are what identify the pattern.
 _REMOVED_SAMPLE = 8
 
+# What share of the chapters the contents page lists may end up without a heading.
+# Four reports that faked bold by painting every glyph twice sat at 59-85% and
+# reported OK, because counting headings cannot see it: the subsections that
+# survived are headings too. The reports whose structure is intact miss nothing,
+# and the worst remaining cases from other causes are at 10-14%, so a warning
+# starts just above zero and a failure well below them.
+_OUTLINE_COVERAGE_WARN = 0.05
+_OUTLINE_COVERAGE_FAIL = 0.20
+
+# How many missing chapter numbers to name before summarising the rest.
+_MISSING_CHAPTER_SAMPLE = 6
+
 _TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
+_HEADING_NUMBER_RE = re.compile(r"^#{1,6}\s+(\d+(?:\.\d+)*)\.?\s")
 _WORD_RE = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
 
 
@@ -127,6 +140,40 @@ def _check(label: str, ok: bool, detail: str, *, warn_only: bool = False) -> Che
     if ok:
         return Check(label, OK, detail)
     return Check(label, WARN if warn_only else FAIL, detail)
+
+
+def _outline_coverage(lines: list[str], pages: list[str]) -> Check | None:
+    """Compare the chapters the contents page lists against the headings promoted.
+
+    The check that was missing while four reports carried a tenth of their
+    chapters: a heading count cannot see that loss, because the subsections that
+    survived are headings too, so the document reports a plausible number and
+    passes. The contents page is the only independent statement of what the
+    document contains.
+
+    The outline is read with the normaliser's own ``_extract_toc``, so the
+    comparison is against the outline the normaliser actually worked from rather
+    than a second reading of the same page. None when there is no contents page to
+    compare with - a report numbered only in its body is no evidence either way.
+    """
+    _, outline, _, _ = _extract_toc("\n".join(pages).splitlines())
+    if not outline:
+        return None
+
+    promoted = {m.group(1) for line in lines if (m := _HEADING_NUMBER_RE.match(line))}
+    missing = [number for number in outline if number not in promoted]
+    detail = f"{len(outline) - len(missing)}/{len(outline)} kapitol obsahu má nadpis"
+    if missing:
+        shown = ", ".join(missing[:_MISSING_CHAPTER_SAMPLE])
+        rest = len(missing) - _MISSING_CHAPTER_SAMPLE
+        detail += f" - chybí {shown}" + (f" a {rest} dalších" if rest > 0 else "")
+
+    share = len(missing) / len(outline)
+    if share > _OUTLINE_COVERAGE_FAIL:
+        return Check("pokrytí obsahu", FAIL, detail)
+    if share > _OUTLINE_COVERAGE_WARN:
+        return Check("pokrytí obsahu", WARN, detail)
+    return Check("pokrytí obsahu", OK, detail)
 
 
 def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> list[Check]:
@@ -202,6 +249,9 @@ def check_markdown(stem: str, is_pdf: bool, page_count: int | None = None) -> li
                     warn_only=True,
                 )
             )
+            coverage = _outline_coverage(lines, pages)
+            if coverage is not None:
+                checks.append(coverage)
         else:
             checks.append(Check("mapa stránek", WARN, "chybí .pages.json, čísla stran nebudou"))
 
