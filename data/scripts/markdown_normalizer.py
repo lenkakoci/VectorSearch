@@ -40,8 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
-# markdown -> extract -> chunk -> import cascade re-runs on its own.
-MARKDOWN_VERSION = 7
+# markdown -> extract -> chunk -> import cascade re-runs on its own. It covers
+# the text pdfminer hands over as well: 8 is the overprint filter in
+# pdf_overprint, which changed the Markdown of four reports.
+MARKDOWN_VERSION = 8
 
 # The heading the annex is filed under. Without one it inherits the last
 # chapter's label, which is how 130 of 216 chunks in one report came to be cited

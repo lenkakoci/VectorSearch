@@ -65,7 +65,7 @@ internal.
 exits 1 on failure; `--triage` groups what needs a decision, `--removed` prints
 what the normaliser deleted from each document and under which rule.
 
-Corpus today: 16 documents, 2040 chunks, of which 1015 are annex and carry no
+Corpus today: 16 documents, 2049 chunks, of which 1015 are annex and carry no
 vector. Three source PDFs are scans without a text layer and are skipped.
 
 ## Four things to understand before changing anything
@@ -196,6 +196,24 @@ neither configuration works alone.
   would slip past that.
 - **A sentence opening with a number looks like a heading.** Anything locating
   headings must check the number against the contents-page outline.
+- **A PDF may paint every glyph twice, and a heading then stops being one.** A
+  report whose generator has no bold face fakes one by printing each glyph of a
+  heading a second time 0.6pt away, so pdfminer correctly returns
+  `66.. ČČEERRPPAACCÍÍ ZZKKOOUUŠŠKKAA` for `6. ČERPACÍ ZKOUŠKA`. `_NUMBERED_RE`
+  cannot match a number followed by two dots and the 0.85 similarity fallback
+  never reaches a doubled title, so four reports kept only 2 to 7 of their 13 to
+  17 chapters and every chunk under a lost one was cited by the previous
+  heading - 41 of the 52 contents entries the corpus failed to promote.
+  `pdf_overprint` drops the second impression by geometry, which is what makes it
+  safe: the copy sits within 0.171 of a glyph width while a real Czech `nn` is a
+  full advance away at 0.749, and a report that does not overprint loses nothing,
+  so its page text is unchanged byte for byte. Only *consecutive* copies are
+  handled; a generator that repaints a whole block of lines would need more.
+- **Counting headings cannot tell you a chapter is missing**, because the
+  subsections that survived are headings too - all four reports above reported a
+  plausible count and passed. `check_pipeline`'s `pokrytí obsahu` compares the
+  contents-page outline against the headings actually promoted, which is the only
+  independent statement of what a document contains.
 - **Two concurrent `--force` runs write the same files.** Run long regenerations
   in the background once, and wait for them.
 - **`docker compose up --build api frontend` rebuilds postgres too.** A
@@ -350,8 +368,16 @@ wants its own design first and a fresh ingest of both bundles.
 
 Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
 its annex has no form pages after the last heading, so there is no boundary to
-find; Monitoring has one chunk without a section (its front matter, since no
-title is promoted); three scans await OCR.
+find, and GF_P185442 now has the same shape under `11. LITERATURA` at 31%;
+Monitoring has one chunk without a section (its front matter, since no title is
+promoted); three scans await OCR.
+
+**Eleven chapters are still missing for reasons other than overprinting**, and
+`pokrytí obsahu` names them: D35 misses 4, 5.4.3 and 5.4.4, Monitoring 3.1, 4 and
+5.1.3, Novy Opatov 5 and 8.2, Orličky 7, Ceska Kubice 5.6.2 and 5.7. Each is a
+separate cause, which is why they were left out of the overprint fix. None of
+them fails: the check warns above 5% of a document's outline and fails above 20%,
+so Ceska Kubice's 2 of 45 is reported as OK with the numbers still named.
 
 ## Always-on engineering rules
 
