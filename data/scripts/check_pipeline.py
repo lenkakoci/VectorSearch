@@ -39,7 +39,7 @@ import psycopg2
 from chunker import chunk_markdown
 from injection_scan import scan_chunks, summarize
 from manifest import Manifest, timestamp_key
-from markdown_normalizer import MARKDOWN_VERSION, _extract_toc, _signature
+from markdown_normalizer import ANNEX_TITLE, MARKDOWN_VERSION, _extract_toc, _signature
 from page_classifier import FORM
 from pipeline_common import (
     MANIFEST_PATH,
@@ -385,7 +385,18 @@ def check_chunks(
             Check("přílohy", OK, f"{annex}/{total} chunků je příloha, nezaembeddováno")
         )
 
-    if len(body) >= _SECTION_DOMINANCE_MIN_CHUNKS:
+    # Two signals decide what the annex is, and this check needs both. A form
+    # page is excluded above by its content_kind, but an annex of borehole logs
+    # measures as prose from end to end and keeps that kind on purpose, so it
+    # stays searchable - and then arrives here as one section holding half the
+    # document. Seven reports were flagged for having their annex filed
+    # correctly, which is the opposite of what this check is for.
+    structural = body[
+        body["section"].fillna("").str.split(" > ").str[-1] != ANNEX_TITLE
+    ]
+
+    if len(structural) >= _SECTION_DOMINANCE_MIN_CHUNKS:
+        body = structural
         counts = body["section"].value_counts(dropna=False)
         top_label, top_count = str(counts.index[0]), int(counts.iloc[0])
         share = top_count / len(body)
