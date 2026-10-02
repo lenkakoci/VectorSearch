@@ -65,7 +65,7 @@ internal.
 exits 1 on failure; `--triage` groups what needs a decision, `--removed` prints
 what the normaliser deleted from each document and under which rule.
 
-Corpus today: 16 documents, 2049 chunks, of which 1015 are annex and carry no
+Corpus today: 32 documents, 3337 chunks, of which 1161 are annex and carry no
 vector. Three source PDFs are scans without a text layer and are skipped.
 
 ## Four things to understand before changing anything
@@ -366,9 +366,14 @@ leaving it. The fix touches document identity (one source file, several
 `documents` rows), extraction (one call per sub-report) and citations, so it
 wants its own design first and a fresh ingest of both bundles.
 
-Also open, smaller: ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM` because
-its annex has no form pages after the last heading, so there is no boundary to
-find, and GF_P185442 now has the same shape under `11. LITERATURA` at 31%;
+Also open, smaller: **the annex with no form pages after the last heading is a
+template, not a one-off.** ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM`
+because there is no boundary to find, and the same shape now appears in
+ZZ_Sl.Ostrava (49% of its prose chunks), ZZ_Morávka (36%), ZZ_DEZA (31%) and,
+under `11. LITERATURA`, GF_P185442 (31%) - all the same report template, so it
+recurs with every one of its reports that enters the corpus. Of the documents
+still awaiting chunking only ZZ_Č. Těšín (kontaminační průzkum) is shaped that
+way, so fixing it first would save re-paying for one document, not for a batch;
 Monitoring has one chunk without a section (its front matter, since no title is
 promoted); three scans await OCR.
 
