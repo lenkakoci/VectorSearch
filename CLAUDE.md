@@ -366,14 +366,26 @@ leaving it. The fix touches document identity (one source file, several
 `documents` rows), extraction (one call per sub-report) and citations, so it
 wants its own design first and a fresh ingest of both bundles.
 
-Also open, smaller: **the annex with no form pages after the last heading is a
-template, not a one-off.** ZZ_Pazderna keeps 34 chunks under `6.1 SEZNAM NOREM`
-because there is no boundary to find, and the same shape now appears in
-ZZ_Sl.Ostrava (49% of its prose chunks), ZZ_Morávka (36%), ZZ_DEZA (31%) and,
-under `11. LITERATURA`, GF_P185442 (31%) - all the same report template, so it
-recurs with every one of its reports that enters the corpus. Of the documents
-still awaiting chunking only ZZ_Č. Těšín (kontaminační průzkum) is shaped that
-way, so fixing it first would save re-paying for one document, not for a batch;
+Also open, and bigger than it looked: **`_annex_start` is fooled by the annex's
+own list of attachments.** Its heading scan accepts any line whose number appears
+in the contents page, and this template opens its annex with
+`1. Přehledná situace okolí zájmového území` - number 1 is listed (chapter 1 is
+`ÚVOD A VYMEZENÍ CÍLŮ`), the line reads like a section title, so it counts as the
+*last* heading, on page 13 of 32 in ZZ_Sl.Ostrava. Everything between the real
+final chapter and the first form page after that then stays in the body and
+inherits the last chapter's label: 49% of Sl.Ostrava's prose chunks under
+`5.1 SEZNAM NOREM`, 36% of Morávka's, 31% of DEZA's. Pazderna is the same bug
+through the other door - `4 EO (ekvivalentní obyvatele) z každé projektované
+stavby RD` - which is exactly the case the docstring claims to defend against,
+except the guard only requires the *number* to be listed and 4 is listed.
+
+Measured over the corpus: **28 documents have such a false last heading**, 19 of
+them already ingested. `_titles_match` returns False for every one of them against
+the outline title for that number, so requiring the title to match - which
+`_apply_outline` already does - is the obvious fix, to be checked against the two
+bundles before it lands. Nine of the documents still awaiting chunking are
+affected, so this is worth fixing *before* finishing the ingest rather than paying
+for them twice.
 Monitoring has one chunk without a section (its front matter, since no title is
 promoted); three scans await OCR.
 
