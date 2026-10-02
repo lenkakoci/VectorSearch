@@ -7,7 +7,12 @@ comes out looks perfectly well formed either way.
 
 from __future__ import annotations
 
-from markdown_normalizer import _heuristic_headings, _signature, normalize_markdown
+from markdown_normalizer import (
+    _annex_start,
+    _heuristic_headings,
+    _signature,
+    normalize_markdown,
+)
 
 
 def _document(furniture_repeats: int) -> str:
@@ -181,3 +186,63 @@ def test_a_chapter_numbered_1_1_is_still_a_chapter():
     headings = _heuristic_headings(lines)
 
     assert headings == {0, 5, 10}, "the three chapters, none of the annex list"
+
+
+def _annex_pages() -> tuple[list[str], list[str], dict[str, str]]:
+    """A report whose annex is prose from end to end, as this template's are.
+
+    Page 0 is the contents page, 1 and 2 the body, 3 the annex divider and 4 the
+    first attachment. No page measures as a form, which is the whole point: a
+    borehole log is long lines and whole clauses.
+    """
+    pages = [
+        "OBSAH\n1. UVOD ..... 1\n2. POUZITA LITERATURA A NORMY ..... 2",
+        "1. UVOD\n" + " ".join(_prose("uvodu")),
+        "2. POUZITA LITERATURA A NORMY\n[1] Demek, J. et al, 1987: Zemepisny lexikon.",
+        "PRILOHOVA CAST\nSeznam priloh:\n1.  Prehledna situace okoli zajmoveho uzemi\n2.  Geologicky profil vrtu",
+        "Priloha c. 1\nPrehledna situace okoli zajmoveho uzemi\nmapovy podklad prevzat z serveru CGS",
+    ]
+    kinds = ["prose"] * len(pages)
+    outline = {"1": "UVOD", "2": "POUZITA LITERATURA A NORMY"}
+    return pages, kinds, outline
+
+
+def test_a_prose_annex_is_found_by_its_own_announcement():
+    """Without this the annex has no boundary at all and keeps the last chapter.
+
+    ZZ_Sl.Ostrava has no form page anywhere in its 32 pages, so the form rule
+    found nothing and 49% of its prose chunks were cited as "5.1 SEZNAM NOREM".
+    """
+    pages, kinds, outline = _annex_pages()
+
+    assert _annex_start(pages, kinds, outline) == 3
+
+
+def test_the_annex_list_does_not_count_as_the_last_chapter():
+    """The line that used to fool the scan, now rejected on its title.
+
+    "1. Prehledna situace okoli zajmoveho uzemi" carries number 1, and 1 is in
+    the contents page - but the contents page calls chapter 1 "UVOD", so the
+    titles do not match and the annex can no longer declare itself a chapter.
+    """
+    pages, kinds, outline = _annex_pages()
+
+    # The boundary sits before the annex list, so that list is inside the annex.
+    assert _annex_start(pages, kinds, outline) < 4
+
+
+def test_a_sentence_mentioning_an_annex_is_not_an_announcement():
+    """"...je patrna z vyrezu mapy v priloze c. 1" is body text, not a boundary."""
+    pages, kinds, outline = _annex_pages()
+    pages[1] += "\nLokalizace zajmoveho uzemi je patrna z vyrezu mapy v priloze c. 1 a dale."
+
+    assert _annex_start(pages, kinds, outline) == 3
+
+
+def test_a_form_page_still_marks_the_annex():
+    """The original rule stays: a report with no announcement is unaffected."""
+    pages, kinds, outline = _annex_pages()
+    pages[3] = "VYSLEDKY LABORATORNICH ZKOUSEK\nNazev akce: Pazderna\nList: 2/5"
+    kinds[3] = "form"
+
+    assert _annex_start(pages, kinds, outline) == 3

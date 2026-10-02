@@ -41,9 +41,9 @@ logger = logging.getLogger(__name__)
 # Bump when a change here should re-derive Markdown for already-processed
 # sources. Mirrors SCHEMA_VERSION in schemas.py; wired into the manifest so the
 # markdown -> extract -> chunk -> import cascade re-runs on its own. It covers
-# the text pdfminer hands over as well: 8 is the overprint filter in
-# pdf_overprint, which changed the Markdown of four reports.
-MARKDOWN_VERSION = 8
+# the text pdfminer hands over as well: 8 was the overprint filter in
+# pdf_overprint, 9 is the annex boundary learning to recognise a prose annex.
+MARKDOWN_VERSION = 9
 
 # The heading the annex is filed under. Without one it inherits the last
 # chapter's label, which is how 130 of 216 chunks in one report came to be cited
@@ -107,6 +107,18 @@ _TITLE_SEARCH_LINES = 20
 _MAX_ALNUM_LOSS = 0.25
 
 _TABLE_SEPARATOR_RE = re.compile(r"^\|[\s|:-]*-{2,}[\s|:-]*\|?$")
+# How the annex says that it begins. Matched against folded text, so accents and
+# case do not matter: "PŘÍLOHOVÁ ČÁST" and "Přílohová část" are one thing, and a
+# report that lost its diacritics still matches. "priloha" on its own covers the
+# cover line of a single attachment ("Příloha č. 5"), which is how Pazderna opens
+# its annex - it has no "Seznam příloh" page.
+_ANNEX_MARKER_RE = re.compile(r"^(prilohova cast|seznam priloh|prilohy|priloha)\b")
+
+# An announcement is a caption, not a sentence. Without the cap, "Přílohy tvoří
+# geologická dokumentace vrtů, laboratorní protokoly a situace" in a body
+# paragraph would move the boundary into the body.
+_ANNEX_MARKER_MAX_WORDS = 5
+
 _TOC_ENTRY_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(.+?)\s*\.{4,}\s*(\d+)\s*$")
 _NUMBERED_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+(\S.*)$")
 _TOC_CAPTION_RE = re.compile(r"^obsah\b", re.IGNORECASE)
@@ -802,6 +814,24 @@ def _partition_annex(
     return "\n".join(body), "\n".join(annex), body_pages
 
 
+def _announces_annex(page: str) -> bool:
+    """Return whether a page says on a line of its own that the annex starts here.
+
+    These reports do announce it - "PŘÍLOHOVÁ ČÁST" above a "Seznam příloh:", or
+    the cover line of a single attachment, "Příloha č. 5". Anchored at the start
+    of a line and capped in length, so that a sentence referring to an annex
+    ("...je patrná z výřezu vodohospodářské mapy v příloze č. 1") cannot match:
+    folded, that begins "v priloze", not "priloha".
+    """
+    for line in page.splitlines():
+        stripped = line.strip()
+        if not stripped or len(stripped.split()) > _ANNEX_MARKER_MAX_WORDS:
+            continue
+        if _ANNEX_MARKER_RE.match(fold(stripped)):
+            return True
+    return False
+
+
 def _annex_start(pages: list[str], page_kinds: list[str], outline: dict[str, str]) -> int:
     """Return the page index where the annex region begins.
 
@@ -812,15 +842,25 @@ def _annex_start(pages: list[str], page_kinds: list[str], outline: dict[str, str
     "8.4. Závěrečné zhodnocení průzkumu kontaminace", spanning pages 43 to 148
     where section 8.4 itself ends on page 44.
 
-    The boundary is the first form page after the last page that still carries a
-    numbered heading. That holds for a plain report, where the annex follows the
-    final chapter, and for a bundle, where the sub-reports keep numbering to the
-    end and the boundary therefore lands late rather than swallowing them.
+    Two things decide the boundary, and each of them used to be wrong on its own.
+
+    **Which heading is the last one.** Requiring only that the number appear in
+    the contents page is not enough, because this template opens its annex with
+    "1. Přehledná situace okolí zájmového území" - chapter 1 is listed, the line
+    reads like a section title, and the annex therefore declared itself the last
+    chapter on page 13 of 32. Pazderna reached the same end through "4 EO
+    (ekvivalentní obyvatele) z každé projektované stavby RD". The title has to
+    match the one the contents page gives for that number, exactly as
+    ``_apply_outline`` requires before promoting a heading.
+
+    **What marks the start of the annex.** A form page cannot be the only marker:
+    an annex of borehole logs measures as prose from end to end, so
+    ZZ_Sl.Ostrava, which has no form page at all, found no boundary and kept 49%
+    of its prose chunks under "5.1 SEZNAM NOREM". The first page after the last
+    chapter that either announces the annex or is a form page wins. Holds for a
+    bundle too, where the sub-reports keep numbering to the end so the search
+    starts late rather than swallowing them.
     """
-    # The number has to be one the contents page lists. Without that check a
-    # sentence opening with a figure - "4 EO (ekvivalentní obyvatele) z každé
-    # projektované stavby RD" on page 43 of one report - counts as the last
-    # heading and pushes the boundary past the annex entirely.
     if not outline:
         return len(pages)
 
@@ -830,12 +870,17 @@ def _annex_start(pages: list[str], page_kinds: list[str], outline: dict[str, str
             continue
         for line in page.splitlines():
             match = _NUMBERED_RE.match(line.strip())
-            if match is not None and match.group(1) in outline and _is_section_title(match.group(2)):
-                last_heading = index
-                break
+            if match is None or match.group(1) not in outline:
+                continue
+            if not _is_section_title(match.group(2)):
+                continue
+            if not _titles_match(match.group(2), outline[match.group(1)]):
+                continue
+            last_heading = index
+            break
 
     for index in range(last_heading + 1, len(pages)):
-        if page_kinds[index] == FORM:
+        if page_kinds[index] == FORM or _announces_annex(pages[index]):
             return index
     return len(pages)
 
