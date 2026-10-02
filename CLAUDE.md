@@ -65,7 +65,7 @@ internal.
 exits 1 on failure; `--triage` groups what needs a decision, `--removed` prints
 what the normaliser deleted from each document and under which rule.
 
-Corpus today: 32 documents, 3337 chunks, of which 1161 are annex and carry no
+Corpus today: 41 documents, 3739 chunks, of which 1181 are annex and carry no
 vector. Three source PDFs are scans without a text layer and are skipped.
 
 ## Four things to understand before changing anything
@@ -214,6 +214,25 @@ neither configuration works alone.
   plausible count and passed. `check_pipeline`'s `pokrytí obsahu` compares the
   contents-page outline against the headings actually promoted, which is the only
   independent statement of what a document contains.
+- **An annex announces itself, and it is usually prose.** `_annex_start` looked
+  for the first *form* page after the last numbered heading, and both halves of
+  that were wrong. A borehole log is prose by every measure, so ZZ_Sl.Ostrava -
+  32 pages, not one form page anywhere - found no boundary at all and filed 49%
+  of its prose chunks under `5.1 SEZNAM NOREM`. And the heading scan accepted any
+  line whose number was listed in the contents page, so the annex's own
+  `1. Přehledná situace okolí zájmového území` became the last chapter on page 13
+  of 32; Pazderna reached the same end through `4 EO (ekvivalentní obyvatele)
+  z každé projektované stavby RD`, which is the case that function's docstring
+  claimed to guard against - the guard checked only the number, and 4 is listed.
+  28 documents carried such a false heading. The title must now match the one the
+  contents page gives, and the boundary is the first page that announces the annex
+  (`PŘÍLOHOVÁ ČÁST`, `Seznam příloh:`, `Příloha č. 5`) *or* is a form page.
+- **Fixing that then broke the check that measured it.** `kvalita sekcí` excluded
+  the annex by `content_kind`, which covers a form page but not a prose annex -
+  and a prose annex keeps that kind on purpose, so it stays searchable. Seven
+  reports were promptly flagged for having their annex filed correctly, their
+  largest section reading `> Přílohy` at 31-48%. A check about *structure* wants
+  both signals: form pages out by kind, annex chunks out by position.
 - **Two concurrent `--force` runs write the same files.** Run long regenerations
   in the background once, and wait for them.
 - **`docker compose up --build api frontend` rebuilds postgres too.** A
@@ -366,28 +385,19 @@ leaving it. The fix touches document identity (one source file, several
 `documents` rows), extraction (one call per sub-report) and citations, so it
 wants its own design first and a fresh ingest of both bundles.
 
-Also open, and bigger than it looked: **`_annex_start` is fooled by the annex's
-own list of attachments.** Its heading scan accepts any line whose number appears
-in the contents page, and this template opens its annex with
-`1. Přehledná situace okolí zájmového území` - number 1 is listed (chapter 1 is
-`ÚVOD A VYMEZENÍ CÍLŮ`), the line reads like a section title, so it counts as the
-*last* heading, on page 13 of 32 in ZZ_Sl.Ostrava. Everything between the real
-final chapter and the first form page after that then stays in the body and
-inherits the last chapter's label: 49% of Sl.Ostrava's prose chunks under
-`5.1 SEZNAM NOREM`, 36% of Morávka's, 31% of DEZA's. Pazderna is the same bug
-through the other door - `4 EO (ekvivalentní obyvatele) z každé projektované
-stavby RD` - which is exactly the case the docstring claims to defend against,
-except the guard only requires the *number* to be listed and 4 is listed.
+**Two documents are deliberately left at `MARKDOWN_VERSION` 8**, and the manifest
+therefore reports them stale: `GF_P188407_DZ_Monitoring_10_2023` and
+`IG a HG pruzkum Myslinka 2018`. Version 9 moves their annex boundary by two or
+three pages, which is not worth 570 and 256 chunks of re-embedding, and Monitoring
+is on the missing-chapters list below, so the fix for that will have to re-ingest
+it anyway. Do not bring them forward with `--markdown-only`: their Markdown *does*
+change, and that command returns before the lines that mark extraction and chunks
+stale, so it would leave the database holding chunks of text that no longer
+exists. Either re-ingest them properly or leave them where they are.
 
-Measured over the corpus: **28 documents have such a false last heading**, 19 of
-them already ingested. `_titles_match` returns False for every one of them against
-the outline title for that number, so requiring the title to match - which
-`_apply_outline` already does - is the obvious fix, to be checked against the two
-bundles before it lands. Nine of the documents still awaiting chunking are
-affected, so this is worth fixing *before* finishing the ingest rather than paying
-for them twice.
 Monitoring has one chunk without a section (its front matter, since no title is
-promoted); three scans await OCR.
+promoted); Špindlerův Mlýn recovers no headings at all and is not imported; three
+scans await OCR.
 
 **Eleven chapters are still missing for reasons other than overprinting**, and
 `pokrytí obsahu` names them: D35 misses 4, 5.4.3 and 5.4.4, Monitoring 3.1, 4 and
