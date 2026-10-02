@@ -23,7 +23,8 @@ The goal is twofold:
 
 ```
 data/PDFs/*.pdf
-   │  extract_reports.py    pdfminer per page → classify pages → normalise
+   │  extract_reports.py    pdfminer per page (pdf_overprint drops a glyph the
+   │                        page paints twice) → classify pages → normalise
    │                        → LLM structured output
    ▼
 data/processed/markdown/<stem>.md
@@ -63,10 +64,17 @@ internal.
 `ingest.py` runs all three stages incrementally and is the normal entry point.
 `check_pipeline.py` verifies the result of every stage, makes no API calls and
 exits 1 on failure; `--triage` groups what needs a decision, `--removed` prints
-what the normaliser deleted from each document and under which rule.
+what the normaliser deleted from each document and under which rule. Two of its
+checks exist because nothing else can ask their question: `pokrytí obsahu`
+compares the contents-page outline against the headings actually promoted (a
+heading count cannot see a lost chapter), and `shoda s markdownem` chunks the
+Markdown again and compares it with the parquet (every other chunk check only
+reads the parquet, so it can say no more than that the parquet agrees with
+itself).
 
 Corpus today: 41 documents, 3739 chunks, of which 1181 are annex and carry no
-vector. Three source PDFs are scans without a text layer and are skipped.
+vector. Of the 49 PDFs on disk, three are scans without a text layer and are
+skipped, and six are converted but have not been through the paid stages.
 
 ## Four things to understand before changing anything
 
@@ -188,14 +196,30 @@ neither configuration works alone.
   Budget a `SCHEMA_VERSION` bump as re-extract *and* re-embed everything, never
   re-extract alone. Measured: the six documents settled after the pdfminer churn
   came to 704 embedded chunks of 1715.
-- **Czech characters do not survive the shell.** A document list passed as
-  arguments arrives as `Orli?ky`. Call `ingest.main([...])` from Python with names
-  read from the manifest.
+- **Czech characters do not survive the shell** - *measured otherwise, 2026-10-02.*
+  Both Git Bash and PowerShell hand `Špindlerův` to Python with the right code
+  points, so the `Orli?ky` this note recorded does not reproduce in the current
+  console. Calling `ingest.main([...])` from Python with names read from the
+  manifest remains the safest habit, because a name read from the manifest cannot
+  have been re-encoded at all - but do not expect the shell to be the culprit
+  when a document goes missing. It was `--only` (below).
+- **A document can be dropped by `--only` without a word, after being paid for.**
+  `chunk_and_embed.py` and `import_reports.py` built their match set with
+  `Path(item).stem`, which strips everything after the last dot: for
+  `ZZ_V.P. - IGP, HGP_final` that yields `ZZ_V.P`, matching nothing. The document
+  was extracted - `extract_reports.py` goes through `resolve_sources` and was
+  right - then silently skipped by both later stages, and the run printed
+  "8 processed", "7 documents" and exited 0. Every report with a dot in its name
+  was affected. `pipeline_common.wanted_stems()` is now the one way to turn a
+  `--only` argument into a stem; strip a known suffix, never a trailing dot group.
 - **A cover page measures as a form** - short lines, no verbs. The classifier
   reclaims a leading run of up to three form pages as the cover; a longer cover
   would slip past that.
-- **A sentence opening with a number looks like a heading.** Anything locating
-  headings must check the number against the contents-page outline.
+- **A sentence opening with a number looks like a heading**, and checking the
+  number against the contents-page outline is not enough on its own - chapter
+  numbers are small integers, so `4 EO (ekvivalentní obyvatele) z každé
+  projektované stavby RD` passes that check. The title has to match the outline
+  title too.
 - **A PDF may paint every glyph twice, and a heading then stops being one.** A
   report whose generator has no bold face fakes one by printing each glyph of a
   heading a second time 0.6pt away, so pdfminer correctly returns
@@ -245,6 +269,20 @@ neither configuration works alone.
   give up at 120 s while the API went on to finish the answer. `frontend/nginx.conf`
   waits 300 s for `/api/`; a timeout that is shorter than the chain behind it
   looks exactly like a broken endpoint.
+- **What a run costs is decided by three flags, and two of them bite.**
+  `MARKDOWN_VERSION` is global, so bumping it marks every manifest entry stale and
+  an unscoped `ingest.py` bills a re-extraction for all of them - `needs_markdown`
+  forces it even when the regenerated Markdown turns out byte-identical. Scope the
+  run with `--only`. `ingest.py --force` propagates into `chunk_and_embed.py`,
+  which then disables the embedding cache, so never use it to force a fresh PDF
+  parse - delete `<stem>.pages.json` instead. And `extract_reports.py
+  --markdown-only` is free: it rewrites the Markdown, records the new version and
+  returns *before* the extraction gate. That last one is how a version bump
+  reaches the documents it does not change without costing anything - but it also
+  returns before the downstream invalidation, so running it on a document whose
+  Markdown *does* change leaves the database holding chunks of text that no longer
+  exists, with the manifest calling them current. `shoda s markdownem` is the
+  check that now catches that.
 - **A cache whose key names a file the container cannot see shares nothing.**
   Both caches key on a fingerprint of `manifest.json`, so that re-ingesting a
   report invalidates them. The API image carries no processed directory, so
@@ -318,7 +356,7 @@ Around that chain sit six things that make the demo cheap to run and possible
 to explain, none of which changes what an answer says (2026-09-16):
 
 - `injection_scan.py`, run by `check_pipeline.py`, tells a human when a
-  document speaks to the model rather than to a reader. All 16 documents are
+  document speaks to the model rather than to a reader. All 41 documents are
   clean, which is the result worth recording: the rules are narrow enough to
   stay quiet on a corpus full of the phrase "metodický pokyn".
 - `answer_log.py` appends every asked question to `ANSWER_DIR/asked.jsonl`
@@ -397,7 +435,16 @@ exists. Either re-ingest them properly or leave them where they are.
 
 Monitoring has one chunk without a section (its front matter, since no title is
 promoted); Špindlerův Mlýn recovers no headings at all and is not imported; three
-scans await OCR.
+scans await OCR; six documents are converted but have not been through the paid
+stages.
+
+**Eight documents carry `(cid:NNN)` instead of characters**, where pdfminer met a
+font with no usable ToUnicode map. Localised - 1.65% of the characters on 14 lines
+of 898 in the worst case, and those lines are attachment captions and company
+names rather than sentences of the survey - and deterministically repairable: for
+one font the cid numbers *are* Unicode (`(cid:345)` is `ř`), for another they are
+ASCII shifted by 29. Pre-existing rather than caused by the overprint filter: the
+counts are identical in the version 7 page maps.
 
 **Eleven chapters are still missing for reasons other than overprinting**, and
 `pokrytí obsahu` names them: D35 misses 4, 5.4.3 and 5.4.4, Monitoring 3.1, 4 and

@@ -139,11 +139,26 @@ i `PDFs/Roudno.pdf`.
 ### Co kontroluje `check_pipeline.py`
 
 Nic nezapisuje, nevolá API, nestojí nic. Návratový kód `1` při chybě. U každého
-dokumentu ověří: počet nadpisů v Markdownu, zbytky po konverzi (obsah, tabulky,
-paginace), mapu stránek, extrakci a její schéma, počet a velikost chunků, že
-**každý** chunk má sekci, podíl chunků s číslem stránky, dimenze embeddingů,
-shodu s databází, naplněný fulltextový index a nakonec zkusí slova ze středu
-dokumentu opravdu vyhledat.
+dokumentu ověří: počet nadpisů v Markdownu, pokrytí obsahu, zbytky po konverzi
+(obsah, tabulky, paginace), mapu stránek, extrakci a její schéma, počet
+a velikost chunků, shodu chunků s Markdownem, že **každý** chunk má sekci, podíl
+chunků s číslem stránky, dimenze embeddingů, shodu s databází, naplněný
+fulltextový index a nakonec zkusí slova ze středu dokumentu opravdu vyhledat.
+
+Dvě z těch kontrol existují proto, že ostatní tuhle otázku položit neumějí:
+
+- **`pokrytí obsahu`** porovná kapitoly ze stránky s obsahem proti nadpisům,
+  které v Markdownu skutečně jsou. Počítat nadpisy nestačí — podnadpisy, které
+  přežily, jsou taky nadpisy, takže dokument, co ztratil 10 kapitol ze 17,
+  hlásil plausibilní počet a prošel jako OK. Varuje nad 5 % chybějících, selže
+  nad 20 %, a chybějící čísla vypisuje jmenovitě. Dnes 538 z 549 kapitol napříč
+  korpusem.
+- **`shoda s markdownem`** Markdown znovu nachunkuje a porovná text po textu
+  s parquetem. Všechny ostatní kontroly chunků čtou jen parquet, takže umějí
+  říct nejvýš to, že parquet je konzistentní sám se sebou. Tahle zavírá díru po
+  `--markdown-only`, které Markdown přepíše, ale vrací se dřív, než by označilo
+  extrakci a chunky za neaktuální — databáze pak drží chunky textu, který už
+  neexistuje, a manifest je považuje za aktuální.
 
 Navíc hledá v chunkách věty, které mluví k modelu, ne ke čtenáři: „ignoruj
 předchozí pokyny", přidělení role, diktovanou odpověď nebo napodobený systémový
@@ -151,7 +166,7 @@ prompt, česky i anglicky. Do promptu jdou zdroje jako data, takže tohle není
 obrana, ale jediné místo, kde se člověk dozví, že taková věta v korpusu je.
 Pravidla jsou schválně úzká: běžné „podle metodického pokynu MŽP" nebo „podle
 pokynů objednatele" mlčí, protože hlásí se až sloveso rušící dřívější zadání.
-Dnes je všech 16 dokumentů čistých.
+Dnes je všech 41 dokumentů čistých.
 
 `--triage` vypíše jen to, co potřebuje rozhodnutí, seskupené podle toho, co s tím
 dělat. `--removed` ukáže, co normalizátor z dokumentu smazal a podle jakého
@@ -265,12 +280,27 @@ závislé na pořadí:
 Formulářové strany nejsou celá příloha. Vrtné protokoly jsou próza podle všech
 měřítek, ale leží za poslední kapitolou — a bez hranice zdědí její nadpis.
 
-> **Hranice = první formulářová strana za poslední stranou, která nese číslovaný
-> nadpis uvedený v obsahu.**
+> **Hranice = první strana za poslední kapitolou, která se k příloze sama
+> přihlásí — nebo, když se nepřihlásí žádná, první formulářová strana.**
 
-Požadavek „uvedený v obsahu" je nutný: bez něj se za nadpis počítá věta
-začínající číslem (*„4 EO (ekvivalentní obyvatele) z každé projektované
-stavby RD"*) a hranice přeskočí přílohu celou.
+Přihlášením se myslí samostatný řádek `PŘÍLOHOVÁ ČÁST`, `Seznam příloh:` nebo
+titulní list jedné přílohy `Příloha č. 5`. Shoda je ukotvená na začátek řádku
+a omezená na pět slov, takže věta *„…je patrná z výřezu mapy v příloze č. 1"*
+nic nespustí — po složení začíná „v priloze", ne „priloha".
+
+Formulář sám stačit nemůže: příloha z vrtných protokolů měří jako próza od
+začátku do konce, takže zpráva, která ve 32 stranách nemá jedinou formulářovou
+stranu, nenašla hranici vůbec a 49 % jejích prozaických chunků skončilo pod
+`5.1 SEZNAM NOREM`.
+
+**Poslední kapitola se pozná podle čísla i názvu.** Číslo musí být v obsahu
+a název musí odpovídat tomu, co pro ně obsah uvádí. Samotné číslo nestačilo:
+příloha začíná vlastním seznamem, jehož první řádek je
+*„1. Přehledná situace okolí zájmového území"* — jednička v obsahu je, řádek
+vypadá jako název sekce, a příloha se tím prohlásila za poslední kapitolu na
+straně 13 z 32. Druhými dveřmi vedla tatáž chyba přes věty začínající číslem
+(*„4 EO (ekvivalentní obyvatele) z každé projektované stavby RD"*). Takhle
+chybovalo 28 dokumentů korpusu.
 
 Pravidlo drží pro běžný posudek (příloha následuje po poslední kapitole)
 i pro **svazek** více zpráv v jednom PDF, kde dílčí zprávy číslují až do konce
@@ -665,9 +695,10 @@ co fungovalo dřív, jen přibývá skloňování.
 
 Hotová a ověřená je celá cesta od PDF k odpovědi: zpracování posudků, hybridní
 vyhledávání, reranking s bránou relevance, odpověď s ověřenými citacemi a webové
-demo nad obojím. V databázi je **16 dokumentů a 2040 chunků**, z toho 1015
-přílohových bez vektoru (dohledatelných fulltextem). Tři zdroje čekají na OCR
-a do korpusu se nedostaly.
+demo nad obojím. V databázi je **41 dokumentů a 3739 chunků**, z toho 1181
+přílohových bez vektoru (dohledatelných fulltextem). Na disku je 49 PDF: tři
+jsou skeny čekající na OCR, šest je převedených, ale zatím neprošly placenými
+fázemi.
 
 ### Co bylo postaveno a co to vyřešilo
 
@@ -687,6 +718,10 @@ a do korpusu se nedostaly.
 | **Log otázek** — `answer_log.py` | Zlatou sadu psal člověk podle toho, co si myslel, že se kolegové zeptají. Skutečné otázky jsou lepší, a v logu jsou i s citáty a výsledkem kontroly, tedy přesně v podobě, jakou `golden.yaml` potřebuje |
 | **Odkaz z citace do PDF** — `GET /api/documents/{id}/pdf` | Citace uváděla stranu, ale dojít na ni znamenalo hledat soubor ručně. Teď je to odkaz a prohlížeč otevře přímo tu stranu |
 | **Průběh odpovědi** — `POST /api/answer/stream` | Deset až třicet sekund u jednoho spinneru vypadá jako zaseknutá stránka. Kroky se hlásí, jak nastávají, i s čísly |
+| **Filtr přetisků** — `pdf_overprint.py` | Některé posudky simulují tučný nadpis tím, že každý glyf vykreslí dvakrát s posunem 0,6 bodu, takže z „6. ČERPACÍ ZKOUŠKA" vyšlo „66.. ČČEERRPPAACCÍÍ ZZKKOOUUŠŠKKAA" a nadpis se nerozpoznal. Čtyři zprávy ztratily 10 až 11 ze 13 až 17 kapitol. Rozhoduje geometrie, ne text |
+| **Příloha se smí ohlásit textem** — `_annex_start` | Hranice se hledala jako formulářová strana, ale příloha z vrtných protokolů je próza od začátku do konce — jedna zpráva nenašla hranici vůbec a 49 % jejích prozaických chunků skončilo pod `5.1 SEZNAM NOREM`. A příloha se navíc sama vydávala za poslední kapitolu, protože stačilo, aby číslo jejího seznamu bylo v obsahu; chybovalo tak 28 dokumentů |
+| **Dvě nové kontroly** — `pokrytí obsahu`, `shoda s markdownem` | Obě zavírají díru, kterou ostatní kontroly neumějí vidět: počítat nadpisy nepozná chybějící kapitolu, a čtení parquetu nepozná, že Markdown se mezitím změnil |
+| **`--only` s tečkou v názvu** — `wanted_stems()` | `Path(item).stem` u názvu `ZZ_V.P. - IGP, HGP_final` vrátí `ZZ_V.P`, takže chunkování i import pro ten dokument tiše neudělaly nic — po zaplacené extrakci a s návratovým kódem 0 |
 
 Naměřené výsledky jsou v sekcích [Měření kvality vyhledávání](#měření-kvality-vyhledávání)
 a [Odpovědi s citacemi](#odpovědi-s-citacemi). Ve zkratce: reranking zvedl
@@ -701,7 +736,9 @@ podkladu nedostala vymyšlenou odpověď.
 | --- | --- | --- |
 | **Tři skeny bez OCR** | mimo korpus | OCR je krok mimo pipeline; na stroji není `ocrmypdf` ani `tesseract`. Běh je ohlásí jako `skipped` a pokračuje dál |
 | **Svazky více zpráv v jednom PDF** | Sedmirohé (11 zpráv) a Metan jih (5) mají běh chunků pod `8. Závěr > 3.2. Podzemní vody` | správné řešení je rozpad na samostatné dokumenty, což se dotýká identity dokumentu, extrakce i citací |
-| **Prozaická příloha bez formulářových stran** | ZZ_Pazderna: 34 chunků pod `6.1 SEZNAM NOREM` | hranice přílohy se hledá jako formulářová strana; když žádná za posledním nadpisem není, nemá na co ukázat |
+| **Jedenáct kapitol bez nadpisu z jiných příčin** | D35 (4, 5.4.3, 5.4.4), Monitoring (3.1, 4, 5.1.3), Novy Opatov (5, 8.2), Orličky (7), Ceska Kubice (5.6.2, 5.7) | každá má jinou příčinu, takže se neřešily spolu se zdvojenými glyfy. `pokrytí obsahu` je jmenovitě vypisuje, takže jsou zdokumentované |
+| **`(cid:NNN)` místo znaků** | 8 dokumentů, nejvíc 1,65 % znaků na 14 řádcích z 898 | pdfminer u fontu bez použitelného mapování na Unicode. Zasažené řádky jsou popisky příloh a názvy firem, ne věty posudku. Opravitelné je to deterministicky: u jednoho fontu jsou cid čísla přímo Unicode (`(cid:345)` = `ř`), u druhého jde o posun o 29 proti ASCII |
+| **Dva dokumenty na starší verzi Markdownu** | Monitoring a Myslinka zůstaly na `MARKDOWN_VERSION` 8 | verze 9 jim posune hranici přílohy o dvě až tři strany, což nestojí 570 a 256 chunků za re-embedding. Nesmí se na ně pustit `--markdown-only`, protože jim Markdown mění a ten příkaz neinvaliduje databázi |
 | **Jeden chunk bez sekce** | Monitoring, chunk #0 (rozdělovník a seznam příloh) | důsledek pravidla „žádný titulek je lepší než špatný"; `check_pipeline` to hlásí jako CHYBU, i když jde o front matter |
 | **Extrakční schéma je provizorní** | `report_type` je volný text, `extra_fields` sbírá zbytek | vzniklo dřív než reálné posudky. Teď je poprvé dost dat: `cislo_zakazky`, `cislo_geofond`, `hydrogeologicky_rajon`, `hloubka_vrtu`, `vystroj_vrtu` se opakují napříč dokumenty. Postup je v `.claude/skills/data-ingestion/SKILL.md` |
 | **Reranking je nejpomalejší krok** | u nové otázky 7 až 13 s, u dřív ohodnocené 4 ms | změřeno: menší dávky nepomáhají (latence je na volání, ne na kandidáta) a méně kandidátů měřitelně zhoršuje výsledky. Zbývá tedy neznámkovat znovu, což řeší cache známek na disku |

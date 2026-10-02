@@ -117,7 +117,7 @@ export const STEPS: Step[] = [
     tech: ['data/PDFs', '.gitignore'],
     what: [
       'PDF se zkopíruje do data/PDFs a tím vstupuje do pipeline. Samo o sobě se do PostgreSQL neukládá.',
-      '18 souborů na disku dnes, z toho 16 dokumentů má i výstup v databázi — zbylé tři jsou skeny bez textové vrstvy.',
+      '49 souborů na disku dnes, z toho 40 má výstup v databázi (plus testovací vzorek, dohromady 41 dokumentů). Tři jsou skeny bez textové vrstvy a šest je převedených, ale zatím nezaplacených.',
       'ingest.py je inkrementální: nový soubor pozná podle sha256 a projede jím všechny čtyři fáze, beze změny se nic nepočítá znovu.',
     ],
     gotchas: [
@@ -126,13 +126,17 @@ export const STEPS: Step[] = [
         text: 'Když stránka nemá žádný stripnutý text, extrakce to pozná a dokument označí jako "skipped" — pipeline pokračuje dál, dokument prostě zůstane mimo korpus. Tři dnes čekají na OCR, které pipeline neumí.',
       },
       {
+        title: 'Tečka v názvu zprávy zahodila dokument',
+        text: '--only si stavělo porovnávací množinu přes Path(item).stem, což u názvu "ZZ_V.P. - IGP, HGP_final" vrátí "ZZ_V.P", protože vše po poslední tečce bere za příponu. Chunkování a import pak pro ten dokument tiše neudělaly nic — a extrakce, která jde jinou cestou, už za něj byla zaplacená. Běh přitom skončil nulou a hlásil "8 processed", potom "7 documents". Týkalo se každé zprávy s tečkou v názvu.',
+      },
+      {
         title: 'Diakritika a shell',
-        text: 'Seznam dokumentů předaný přes příkazovou řádku se rozbije na "Orli?ky". Skripty se proto volají z Pythonu se jmény načtenými z manifestu, ne z shellu.',
+        text: 'Zapsaná past říká, že seznam dokumentů předaný přes příkazovou řádku se rozbije na "Orli?ky". V dnešním prostředí se to nepotvrdilo — Git Bash i PowerShell předají "Špindlerův" se správnými kódy znaků. Volat skripty z Pythonu se jmény z manifestu je přesto nejbezpečnější zvyk, protože jméno pak nemůže projít žádným překódováním.',
       },
     ],
     numbers: [
-      { label: 'PDF na disku', value: '18' },
-      { label: 'v databázi', value: '16' },
+      { label: 'PDF na disku', value: '49' },
+      { label: 'v databázi', value: '41' },
       { label: 'čeká na OCR', value: '3' },
     ],
     files: ['data/scripts/ingest.py', 'data/scripts/pipeline_common.py'],
@@ -149,6 +153,7 @@ export const STEPS: Step[] = [
       'pdf_pages() otevře soubor jednou a projde ho stránku po stránce nízkoúrovňovým API pdfmineru (PDFResourceManager, TextConverter, PDFPageInterpreter).',
       'Ze stejného průchodu vzniknou dva výstupy: text pro Markdown a <stem>.pages.json — prostý JSON seznam řetězců, jeden na stranu.',
       'Pozdější krok locate_pages() hledá text chunku v tomto seznamu stran. Musí jít o stejný extraktor, který text vyrobil, jinak se citace stránek rozjede.',
+      'Při čtení se zahazuje druhý otisk glyfu u fake boldu: některé zprávy simulují tučný nadpis tím, že každý znak vykreslí dvakrát s posunem 0,6 bodu. Filtruje se v render_char, tedy ještě před layout analýzou, aby mezery a dělení slov vycházely ze správné geometrie.',
     ],
     gotchas: [
       {
@@ -156,13 +161,22 @@ export const STEPS: Step[] = [
         text: 'Dřívější nastavení používalo jeden nástroj na Markdown a jiný na mapu stran. Stránku se podařilo dohledat jen u 63 % chunků. Jeden engine to zvedl na 98 %.',
       },
       {
+        title: 'Tučný nadpis, který přestal být nadpisem',
+        text: 'Z "6. ČERPACÍ ZKOUŠKA" vycházelo "66.. ČČEERRPPAACCÍÍ ZZKKOOUUŠŠKKAA", protože PDF kreslí každý glyf dvakrát. Takový řádek neprojde regulárním výrazem pro číslovaný nadpis, takže čtyři zprávy ztratily 10 až 11 ze svých 13 až 17 kapitol a jejich chunky se citovaly předchozím nadpisem. Rozhoduje geometrie, ne text: kopie leží do 0,171 šířky glyfu, zatímco skutečné české "nn" je celou šířku daleko.',
+      },
+      {
         title: 'Chybějící textová vrstva',
         text: 'Když žádná strana nemá stripnutý text, vyhodí se MissingTextLayer a dokument se počítá jako "skipped", ne jako chyba — pipeline nespadne, jen dokument nechá bez zpracování.',
+      },
+      {
+        title: 'pdfminer nevrátí dvakrát totéž',
+        text: 'Layout analýza iteruje přes množinu textových objektů hashovaných adresou v paměti, takže druhý běh vrátí stránku s jedním glyfem jinde. Proto se mapa stran čte z cache a nový parse se vynucuje jen smazáním <stem>.pages.json nebo přes --force.',
       },
     ],
     numbers: [
       { label: 'dohledání strany', value: '63 % → 98 %' },
       { label: 'per-page extract_text', value: '~2× pomalejší' },
+      { label: 'zahozené přetisky', value: '175–193 glyfů / zprávu' },
     ],
     files: ['data/scripts/extract_reports.py'],
   },
@@ -242,13 +256,21 @@ export const STEPS: Step[] = [
     tech: ['_annex_start()'],
     what: [
       'Formulářové strany nejsou celá příloha. Vrtné protokoly jsou próza podle všech měřítek, ale leží za poslední kapitolou — bez hranice by zdědily její nadpis.',
-      'Pravidlo: hranice je první formulářová strana za poslední stranou, která nese číslovaný nadpis uvedený v obsahu.',
-      'Požadavek "uvedený v obsahu" je nutný — bez něj se za nadpis počítá věta začínající číslem a hranice by přeskočila přílohu celou.',
+      'Pravidlo: hranice je první strana za poslední kapitolou, která se k příloze sama přihlásí ("PŘÍLOHOVÁ ČÁST", "Seznam příloh:", "Příloha č. 5") — nebo, když se nepřihlásí žádná, první formulářová strana.',
+      'Poslední kapitola se hledá podle čísla i názvu: číslo musí být v obsahu a název musí odpovídat tomu, co pro ně obsah uvádí.',
       'Pravidlo drží i pro svazek víc zpráv v jednom PDF: dílčí zprávy číslují až do konce, takže hranice padne pozdě místo aby spolkla jejich strukturu.',
     ],
     gotchas: [
       {
-        title: 'Neopravená chyba, kterou tohle řeší',
+        title: 'Příloha se vydávala za kapitolu',
+        text: 'Stačilo, aby číslo řádku bylo v obsahu — a příloha začíná vlastním seznamem, jehož první řádek je "1. Přehledná situace okolí zájmového území". Jednička v obsahu je, takže se příloha prohlásila za poslední kapitolu na straně 13 z 32 a 49 % prozaických chunků jednoho posudku skončilo pod "5.1 SEZNAM NOREM". Takhle chybovalo 28 dokumentů.',
+      },
+      {
+        title: 'Příloha bez jediného formuláře',
+        text: 'Když je příloha próza od začátku do konce, stará hranice se nenašla vůbec. Proto musí stačit, že se příloha ohlásí textem — formulář je jen záložní signál.',
+      },
+      {
+        title: 'Co to tehdy stálo',
         text: '130 z 216 chunků jednoho posudku bylo bez hranice citováno jako "8.4. Závěrečné zhodnocení", protože vrtné protokoly za touto kapitolou zdědily její nadpis.',
       },
     ],
@@ -338,7 +360,7 @@ export const STEPS: Step[] = [
     ],
     numbers: [
       { label: 'dimenze', value: '1536' },
-      { label: 'nezaembeddováno', value: '1015 / 2040 chunků' },
+      { label: 'nezaembeddováno', value: '1181 / 3739 chunků' },
     ],
     files: ['data/scripts/chunk_and_embed.py', 'data/scripts/gemini_auth.py'],
   },
@@ -356,7 +378,7 @@ export const STEPS: Step[] = [
       'Přílohové chunky mají embedding = NULL (to_pgvector vrátí None) — zůstávají v chunk_raw a tedy ve fts_chunk, jen je nenajde vektorová větev.',
       'Jedna transakce na dokument: commit po každém, rollback na chybě — jeden vadný dokument nezastaví dávku.',
     ],
-    numbers: [{ label: 'v databázi', value: '16 dokumentů, 2040 chunků' }],
+    numbers: [{ label: 'v databázi', value: '41 dokumentů, 3739 chunků' }],
     files: ['data/scripts/import_reports.py'],
   },
   {
@@ -392,14 +414,19 @@ export const STEPS: Step[] = [
     tech: ['check_pipeline.py', 'injection_scan.py'],
     what: [
       'check_pipeline.py nic nezapisuje, nevolá API, nestojí nic. Návratový kód 1 při chybě.',
-      'U každého dokumentu ověří: počet nadpisů, zbytky po konverzi, mapu stránek, extrakci a schéma, počet a velikost chunků, že každý chunk má sekci, podíl chunků s číslem stránky, dimenze embeddingů, shodu s databází, naplněný fulltextový index a zkusí slova ze středu dokumentu opravdu vyhledat.',
+      'U každého dokumentu ověří: počet nadpisů, pokrytí obsahu, zbytky po konverzi, mapu stránek, extrakci a schéma, počet a velikost chunků, shodu chunků s markdownem, že každý chunk má sekci, podíl chunků s číslem stránky, dimenze embeddingů, shodu s databází, naplněný fulltextový index a zkusí slova ze středu dokumentu opravdu vyhledat.',
+      'Pokrytí obsahu porovná kapitoly ze stránky s obsahem proti nadpisům, které v markdownu skutečně jsou. Počítat nadpisy nestačí — podnadpisy, které přežily, jsou taky nadpisy, takže dokument, který ztratil 10 kapitol ze 17, hlásil plausibilní počet a prošel. Varuje nad 5 % chybějících, selže nad 20 %.',
+      'Shoda s markdownem markdown znovu nachunkuje a porovná text po textu s parquetem. Všechny ostatní kontroly chunků čtou jen parquet, takže umějí říct nejvýš to, že parquet je konzistentní sám se sebou.',
       '--triage vypíše jen to, co potřebuje rozhodnutí, seskupené podle akce. --removed ukáže, co normalizátor smazal a podle jakého pravidla.',
       'injection_scan.py hledá v chunkách věty, které mluví k modelu, ne ke čtenáři — "ignoruj předchozí pokyny", přidělení role, diktovanou odpověď, napodobený systémový prompt, česky i anglicky.',
     ],
     safeguard: [
       'Do promptu jdou zdroje jako data, takže scan není obrana — je to jediné místo, kde se člověk dozví, že taková věta v korpusu je. Pravidla jsou úzká schválně: běžné "podle metodického pokynu MŽP" mlčí, protože se hlásí až sloveso rušící dřívější zadání.',
     ],
-    numbers: [{ label: 'čistých dokumentů', value: '16 / 16' }],
+    numbers: [
+      { label: 'čistých dokumentů', value: '41 / 41' },
+      { label: 'pokrytí obsahu', value: '538 / 549 kapitol' },
+    ],
     files: ['data/scripts/check_pipeline.py', 'data/scripts/injection_scan.py'],
   },
 
