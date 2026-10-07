@@ -71,7 +71,7 @@ def test_a_second_process_grades_nothing_it_already_paid_for(monkeypatch, tmp_pa
         return [
             rerank_service.ChunkGrade(id=1, grade=3, reason="obsahuje údaj"),
             rerank_service.ChunkGrade(id=2, grade=0, reason="nesouvisí"),
-        ]
+        ], {"prompt": 1200, "output": 40, "thoughts": 150, "cached": 0, "total": 1390}
 
     monkeypatch.setattr(rerank_service, "call_grader", fake_call)
     monkeypatch.setattr(grade_cache, "corpus_fingerprint", lambda *args, **kwargs: "stálý-korpus")
@@ -79,6 +79,7 @@ def test_a_second_process_grades_nothing_it_already_paid_for(monkeypatch, tmp_pa
     grader = GeminiGrader(model="gemini-test", cache_dir=tmp_path)
     first, stats = grader.grade("Kolik vrtů?", hits)
     assert stats["graded"] == 2 and stats["from_disk"] == 0
+    assert stats["usage"]["total"] == 1390
     assert [grade for grade, _ in first] == [3, 0]
 
     # A fresh process: the in-memory cache is gone, the file is not.
@@ -86,6 +87,7 @@ def test_a_second_process_grades_nothing_it_already_paid_for(monkeypatch, tmp_pa
     second, stats = grader.grade("Kolik vrtů?", hits)
     assert len(calls) == 1, "model se volal podruhé, přestože známky byly na disku"
     assert stats["graded"] == 0 and stats["from_disk"] == 2
+    assert stats["usage"]["total"] == 0, "známka z disku se nesmí účtovat znovu"
     assert [grade for grade, _ in second] == [3, 0]
 
 
@@ -94,7 +96,10 @@ def test_without_a_directory_nothing_is_written(monkeypatch, tmp_path):
     monkeypatch.setattr(
         rerank_service,
         "call_grader",
-        lambda model, prompt: [rerank_service.ChunkGrade(id=1, grade=2, reason="část odpovědi")],
+        lambda model, prompt: (
+            [rerank_service.ChunkGrade(id=1, grade=2, reason="část odpovědi")],
+            {"prompt": 1200, "output": 40, "thoughts": 150, "cached": 0, "total": 1390},
+        ),
     )
     grader = GeminiGrader(model="gemini-test")
     grader.grade("Kolik vrtů?", [{"chunk_id": "chunk-a", "chunk_raw": "text", "title": "t"}])

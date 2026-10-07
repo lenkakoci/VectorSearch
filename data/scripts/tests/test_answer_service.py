@@ -38,6 +38,11 @@ def _hit(number: int, grade: int, text: str) -> dict:
     }
 
 
+# What the grading of forty candidates is billed, roughly to scale: the
+# measured share is five sixths of a question, most of it input.
+GRADING_USAGE = {"prompt": 25000, "output": 600, "thoughts": 2800, "cached": 0, "total": 28400}
+ANSWER_USAGE = {"prompt": 4000, "output": 120, "thoughts": 300, "cached": 0, "total": 4420}
+
 HITS = [
     _hit(1, 3, "Navrženo bylo cca 12 ks hlubokých vrtů o hloubce okolo 80 m."),
     _hit(2, 2, "Vrty budou situovány na parcele č. 9/1."),
@@ -54,7 +59,7 @@ def _search(hits, passed=None):
         "vector_candidates": 80,
         "fts_any_candidates": 80,
         "tsquery": {"czech": "'vrt'"},
-        "rerank": {"reranker": "gemini", "model": "m", "candidates": len(hits), "passed": passed if passed is not None else len(hits), "min_grade": 2, "calls": 2, "ms": 5000, "graded": len(hits), "cached": 0},
+        "rerank": {"reranker": "gemini", "model": "m", "candidates": len(hits), "passed": passed if passed is not None else len(hits), "min_grade": 2, "calls": 2, "ms": 5000, "graded": len(hits), "cached": 0, "usage": GRADING_USAGE},
     }
     return {"rerank": SearchResult(query="q", mode="rerank", limit=40, fetch=80, hits=hits, debug=debug)}
 
@@ -72,18 +77,21 @@ def test_an_answer_is_checked_not_believed(monkeypatch, settings):
     monkeypatch.setattr(
         answer_service,
         "call_model",
-        lambda model, prompt: GroundedAnswer(
-            status="answered",
-            statements=[
-                Statement(
-                    text="Navrženo bylo cca 12 ks vrtů o hloubce okolo 80 m.",
-                    source_ids=[1],
-                    quotes=["cca 12 ks hlubokých vrtů o hloubce okolo 80 m"],
-                ),
-                Statement(text="Vrtů je 14.", source_ids=[1], quotes=["cca 12 ks hlubokých vrtů"]),
-            ],
-            missing=["průměr vrtů"],
-            conflicts=[Conflict(topic="hloubka", source_ids=[1, 99], description="rozpor")],
+        lambda model, prompt: (
+            GroundedAnswer(
+                status="answered",
+                statements=[
+                    Statement(
+                        text="Navrženo bylo cca 12 ks vrtů o hloubce okolo 80 m.",
+                        source_ids=[1],
+                        quotes=["cca 12 ks hlubokých vrtů o hloubce okolo 80 m"],
+                    ),
+                    Statement(text="Vrtů je 14.", source_ids=[1], quotes=["cca 12 ks hlubokých vrtů"]),
+                ],
+                missing=["průměr vrtů"],
+                conflicts=[Conflict(topic="hloubka", source_ids=[1, 99], description="rozpor")],
+            ),
+            ANSWER_USAGE,
         ),
     )
 
@@ -98,6 +106,11 @@ def test_an_answer_is_checked_not_believed(monkeypatch, settings):
     assert result.trace["context"]["chosen"] == 2
     assert [source["cited"] for source in result.sources] == [True, False]
     assert result.model == "gemini-test"
+    # The bill of one question, grading and answering apart.
+    assert result.trace["usage"]["grading"] == GRADING_USAGE
+    assert result.trace["usage"]["answer"] == ANSWER_USAGE
+    assert result.trace["usage"]["total"]["total"] == 28400 + 4420
+    assert result.trace["usage"]["total"]["thoughts"] == 2800 + 300
 
 
 def test_the_gate_stops_a_question_without_evidence_before_the_model(monkeypatch, settings):
@@ -115,6 +128,9 @@ def test_the_gate_stops_a_question_without_evidence_before_the_model(monkeypatch
     assert [source["role"] for source in result.sources] == ["pod prahem", "pod prahem"]
     assert result.trace["gate"] == {"min_grade": 2, "candidates": 2, "passed": 0}
     assert "context" not in result.trace
+    # The grading was paid for, the answering call never happened.
+    assert result.trace["usage"]["answer"]["total"] == 0
+    assert result.trace["usage"]["total"] == GRADING_USAGE
 
 
 def test_a_model_failure_becomes_answer_unavailable(monkeypatch, settings):
@@ -151,7 +167,7 @@ def test_an_answer_is_paid_for_once_and_then_comes_from_the_cache(monkeypatch, s
             ],
             missing=[],
             conflicts=[],
-        )
+        ), ANSWER_USAGE
 
     monkeypatch.setattr(answer_service, "call_model", once)
     first = answer(None, "Kolik vrtů se navrhuje?", settings=settings, use_neighbours=False, cache_dir=tmp_path)
@@ -168,6 +184,10 @@ def test_an_answer_is_paid_for_once_and_then_comes_from_the_cache(monkeypatch, s
     assert second.sources[0]["chunk_id"] == first.sources[0]["chunk_id"]
     assert second.trace["cache"] == "hit"
     assert "cache" not in first.trace
+    # A hit calls nothing, so it must report nothing - otherwise summing the
+    # usage over the log would count the first asking twice.
+    assert first.trace["usage"]["total"]["total"] == 28400 + 4420
+    assert second.trace["usage"]["total"]["total"] == 0
 
 
 def test_a_different_question_is_not_served_from_the_cache(monkeypatch, settings, tmp_path):

@@ -52,7 +52,7 @@ from context_builder import (
     build_context,
     reaches_gate,
 )
-from gemini_auth import create_gemini_client, is_retryable_error
+from gemini_auth import add_usage, create_gemini_client, is_retryable_error, no_usage, usage_of
 from pipeline_common import Settings, load_settings
 from rerank_service import MIN_GRADE, Reranker
 from search_filters import Filters
@@ -96,8 +96,8 @@ class AnswerResult:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def call_model(model: str, prompt: str) -> GroundedAnswer:
-    """Ask the model for a grounded answer.
+def call_model(model: str, prompt: str) -> tuple[GroundedAnswer, dict[str, int]]:
+    """Ask the model for a grounded answer, and report what it cost.
 
     Raises:
         ValueError: When the answer is not the requested JSON.
@@ -116,11 +116,12 @@ def call_model(model: str, prompt: str) -> GroundedAnswer:
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
+    usage = usage_of(response)
     parsed = response.parsed
     if isinstance(parsed, GroundedAnswer):
-        return parsed
+        return parsed, usage
     try:
-        return GroundedAnswer.model_validate_json(response.text or "")
+        return GroundedAnswer.model_validate_json(response.text or ""), usage
     except ValidationError as exc:
         raise ValueError(f"Model returned unparsable output: {(response.text or '')[:200]!r}") from exc
 
@@ -173,6 +174,29 @@ def _reporter(on_progress: Callable[[str, dict[str, Any]], None] | None):
     return report
 
 
+def _log_usage(question: str, usage: dict[str, dict[str, int]]) -> None:
+    """Record what one question was billed for, grading and answering apart.
+
+    Grading reads all forty candidates in full while the answer sees at most
+    eight chunks, so the two are worth keeping apart: measured against the bill,
+    grading is the larger share by far.
+    """
+    total = usage.get("total") or {}
+    grading = usage.get("grading") or {}
+    answering = usage.get("answer") or {}
+    logger.info(
+        "Tokeny za %r: celkem %d (vstup %d, výstup %d, z toho thinking %d)"
+        " | hodnocení %d, odpověď %d",
+        question[:60],
+        total.get("total", 0),
+        total.get("prompt", 0),
+        total.get("output", 0),
+        total.get("thoughts", 0),
+        grading.get("total", 0),
+        answering.get("total", 0),
+    )
+
+
 def _from_cache(payload: dict[str, Any], *, keep_prompt: bool) -> AnswerResult | None:
     """Rebuild an answer stored earlier; None when the payload is unusable.
 
@@ -182,6 +206,10 @@ def _from_cache(payload: dict[str, Any], *, keep_prompt: bool) -> AnswerResult |
     try:
         trace = dict(payload.get("trace") or {})
         trace["cache"] = "hit"
+        # The stored counts are what the first asking cost. This asking called
+        # nothing, so reporting them again would make the log overcount - the
+        # same trap total_ms already has, where a hit reports the original time.
+        trace["usage"] = {"grading": no_usage(), "answer": no_usage(), "total": no_usage()}
         if not keep_prompt:
             trace.pop("prompt", None)
             trace.pop("raw_answer", None)
@@ -294,6 +322,7 @@ def answer(
         "gate": {"min_grade": min_grade, "candidates": len(hits), "passed": len(passed)},
     }
     rerank_stats = search.debug.get("rerank") or {}
+    grading_usage = rerank_stats.get("usage") or no_usage()
     report(
         "retrieval",
         candidates=len(hits),
@@ -305,6 +334,14 @@ def answer(
 
     if not passed:
         logger.info("Gate closed for %r: no candidate reached grade %d", question, min_grade)
+        # A closed gate is the cheapest refusal there is: the grading is paid
+        # for, the answering call never happens.
+        trace["usage"] = {
+            "grading": grading_usage,
+            "answer": no_usage(),
+            "total": grading_usage,
+        }
+        _log_usage(question, trace["usage"])
         trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
         return _remember(cache_key, cache_dir, AnswerResult(
             question=question,
@@ -345,7 +382,7 @@ def answer(
     report("generation", model=settings.answer_model)
     started_model = time.perf_counter()
     try:
-        raw = call_model(settings.answer_model, context.prompt)
+        raw, answer_usage = call_model(settings.answer_model, context.prompt)
     except Exception as exc:  # noqa: BLE001 - every cause has the same remedy
         raise AnswerUnavailable(f"{type(exc).__name__}: {exc}") from exc
     generation_ms = round((time.perf_counter() - started_model) * 1000, 1)
@@ -370,6 +407,12 @@ def answer(
         "model_status": raw.status,
     }
     trace["validation"] = summary
+    trace["usage"] = {
+        "grading": grading_usage,
+        "answer": answer_usage,
+        "total": add_usage(grading_usage, answer_usage),
+    }
+    _log_usage(question, trace["usage"])
     trace["total_ms"] = round((time.perf_counter() - started) * 1000, 1)
     report(
         "validation",

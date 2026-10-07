@@ -57,7 +57,7 @@ from tenacity import (
 )
 
 import grade_cache
-from gemini_auth import create_gemini_client, is_retryable_error
+from gemini_auth import add_usage, create_gemini_client, is_retryable_error, no_usage, usage_of
 from pipeline_common import ANSWERS_DIR, Settings
 
 logger = logging.getLogger(__name__)
@@ -227,8 +227,11 @@ def cache_clear() -> None:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def call_grader(model: str, prompt: str) -> list[ChunkGrade]:
-    """Ask the model to grade one batch; return its grades as parsed.
+def call_grader(model: str, prompt: str) -> tuple[list[ChunkGrade], dict[str, int]]:
+    """Ask the model to grade one batch; return its grades and what they cost.
+
+    The token counts ride along with the response, which is what makes grading -
+    the most expensive step of a question - countable without the API bill.
 
     Raises:
         ValueError: When the answer is not the requested JSON.
@@ -247,11 +250,12 @@ def call_grader(model: str, prompt: str) -> list[ChunkGrade]:
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
+    usage = usage_of(response)
     parsed = response.parsed
     if isinstance(parsed, GradeList):
-        return parsed.grades
+        return parsed.grades, usage
     try:
-        return GradeList.model_validate_json(response.text or "").grades
+        return GradeList.model_validate_json(response.text or "").grades, usage
     except ValidationError as exc:
         raise ValueError(f"Grader returned unparsable output: {(response.text or '')[:200]!r}") from exc
 
@@ -281,6 +285,7 @@ class NoReranker:
             "from_disk": 0,
             "calls": 0,
             "ms": 0.0,
+            "usage": no_usage(),
         }
         return [(None, "bez rerankingu")] * len(hits), stats
 
@@ -325,6 +330,7 @@ class GeminiGrader:
         missing = [index for index, grade in enumerate(grades) if grade is None]
         batches = [missing[start:start + self.batch_size] for start in range(0, len(missing), self.batch_size)]
 
+        usage = no_usage()
         if batches:
             try:
                 with ThreadPoolExecutor(max_workers=min(self.max_parallel, len(batches))) as pool:
@@ -333,7 +339,8 @@ class GeminiGrader:
                     )
             except Exception as exc:  # noqa: BLE001 - every cause has the same remedy
                 raise RerankUnavailable(f"{type(exc).__name__}: {exc}") from exc
-            for batch, batch_grades in zip(batches, results):
+            for batch, (batch_grades, batch_usage) in zip(batches, results):
+                usage = add_usage(usage, batch_usage)
                 for index, grade in zip(batch, batch_grades):
                     grades[index] = grade
                     if grade[1] != UNGRADED_REASON:
@@ -357,11 +364,18 @@ class GeminiGrader:
             "from_disk": from_disk,
             "calls": len(batches),
             "ms": round((time.perf_counter() - started) * 1000, 1),
+            # Only the calls this grade() made. A grade served from either cache
+            # layer was paid for by an earlier question and must not be counted
+            # twice, which is the whole point of counting.
+            "usage": usage,
         }
         return [grade if grade is not None else (0, UNGRADED_REASON) for grade in grades], stats
 
-    def _grade_batch(self, query: str, hits: list[dict[str, Any]]) -> list[Grade]:
-        return align_grades(len(hits), call_grader(self.model, build_prompt(query, hits)))
+    def _grade_batch(
+        self, query: str, hits: list[dict[str, Any]]
+    ) -> tuple[list[Grade], dict[str, int]]:
+        graded, usage = call_grader(self.model, build_prompt(query, hits))
+        return align_grades(len(hits), graded), usage
 
 
 def create_reranker(settings: Settings, name: str = "gemini") -> Reranker:

@@ -94,6 +94,10 @@ def record(
         # Whether this answer was paid for or came from the cache, so counting
         # what a demo cost does not need the API bill.
         "cache": trace.get("cache", "miss"),
+        # What the API said it billed, grading and answering apart. Zero on a
+        # cache hit, so summing this column over the log gives what the demo
+        # actually cost.
+        "usage": trace.get("usage"),
         "gate": trace.get("gate"),
         "context": trace.get("context"),
         "validation": trace.get("validation"),

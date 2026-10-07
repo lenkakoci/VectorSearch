@@ -230,11 +230,17 @@ def to_markdown(
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def extract_metadata(client: genai.Client, model: str, markdown: str) -> dict:
-    """Call Gemini for grounded structured extraction.
+def extract_metadata(
+    client: genai.Client, model: str, markdown: str
+) -> tuple[dict, dict[str, int]]:
+    """Call Gemini for grounded structured extraction, and report what it cost.
 
     ``response_schema`` binds the Pydantic model directly, so ``response.parsed``
     comes back as a validated ``GeologicalReport``.
+
+    The whole Markdown goes in one request, so these token counts are the
+    largest single item on the ingest bill - and the only place where the
+    thinking tokens of an extraction become visible.
     """
     response = client.models.generate_content(
         model=model,
@@ -256,7 +262,7 @@ def extract_metadata(client: genai.Client, model: str, markdown: str) -> dict:
     parsed = response.parsed
     if not isinstance(parsed, GeologicalReport):
         raise RuntimeError(f"Gemini did not return a parsable GeologicalReport: {parsed!r}")
-    return parsed.model_dump()
+    return parsed.model_dump(), usage_of(response)
 
 
 def process_one(
@@ -350,7 +356,14 @@ def process_one(
     logger.info(
         "Extracting metadata from %s (model=%s, schema=v%d)", path.name, model, SCHEMA_VERSION
     )
-    metadata = extract_metadata(client, model, markdown)
+    metadata, usage = extract_metadata(client, model, markdown)
+    logger.info(
+        "  tokeny: celkem %d (vstup %d, výstup %d, z toho thinking %d)",
+        usage.get("total", 0),
+        usage.get("prompt", 0),
+        usage.get("output", 0),
+        usage.get("thoughts", 0),
+    )
 
     document_id = document_id_for(key)
     payload = {
@@ -361,6 +374,11 @@ def process_one(
         "extraction_schema_version": SCHEMA_VERSION,
         "extraction_model": model,
         "extracted_at": utc_now(),
+        # Beside the extraction, not inside it: this is what the call cost, not
+        # something the document says. Nothing downstream reads it, and
+        # build_context_prefix reads only "extraction", so no chunk_text and
+        # therefore no embedding changes because of it.
+        "extraction_usage": usage,
         "extraction": metadata,
     }
     extracted_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

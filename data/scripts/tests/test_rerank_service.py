@@ -95,7 +95,7 @@ def test_grader_calls_the_model_only_for_chunks_not_graded_before(monkeypatch):
         return [
             ChunkGrade(id=line["id"], grade=3 if line["text"] == "text 1" else 1, reason=line["text"])
             for line in lines
-        ]
+        ], {"prompt": 1200, "output": 40, "thoughts": 150, "cached": 0, "total": 1390}
 
     monkeypatch.setattr(rerank_service, "call_grader", fake_call)
     grader = GeminiGrader(model="m", batch_size=2, max_parallel=1)
@@ -104,9 +104,14 @@ def test_grader_calls_the_model_only_for_chunks_not_graded_before(monkeypatch):
     grades, stats = grader.grade("otázka", hits)
     assert grades == [(3, "text 1"), (1, "text 2"), (1, "text 3")]
     assert (stats["calls"], stats["graded"], stats["cached"]) == (2, 3, 0)
+    # Two calls, so two calls' worth of tokens.
+    assert stats["usage"]["total"] == 2 * 1390
+    assert stats["usage"]["thoughts"] == 2 * 150
 
     grades, stats = grader.grade("Otázka ", hits + [_hit(4)])
     assert (stats["calls"], stats["graded"], stats["cached"]) == (1, 1, 3)
+    # Three of the four came from the cache, so only the one call is billed.
+    assert stats["usage"]["total"] == 1390
     assert sent[-1] == ["text 4"]
     assert grades[3] == (1, "text 4")
 
@@ -117,9 +122,16 @@ def test_grader_failure_becomes_rerank_unavailable(monkeypatch):
     def broken(model, prompt):
         raise ValueError("Grader returned unparsable output")
 
+
     monkeypatch.setattr(rerank_service, "call_grader", broken)
     with pytest.raises(RerankUnavailable, match="unparsable"):
         GeminiGrader(model="m").grade("otázka", [_hit(1)])
+
+
+def test_no_reranker_reports_a_zero_bill():
+    """Every reranker reports usage, so a caller never has to special-case one."""
+    _, stats = NoReranker().grade("otázka", [_hit(1)])
+    assert stats["usage"] == {"prompt": 0, "output": 0, "thoughts": 0, "cached": 0, "total": 0}
 
 
 def test_create_reranker_by_name():
